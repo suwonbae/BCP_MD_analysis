@@ -5,49 +5,87 @@ import os
 import re
 import subprocess
 import math
+import time
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy import stats
 
 try:
-    from mpi4py import MPI
-except:
-    print("no MPI")
-
-try:
+    plt.rc('font', size=13, family="Times New Roman")
     plt.rcParams["text.usetex"] = True
 except:
     print("no tex")
 
 class dumpobj():
 
-    def __init__(self, dirname_pattern, dir_end, fname_pattern, Nevery, Nrepeat, Nfreq, end):
+    def __init__(self, path=None, dirname_pattern='equil_{}', dir_start=0, dir_end=0, fname_pattern='dump*.{}', Nevery=10000, Nrepeat=1, Nfreq=10000, end=10000, comm=None):
+
+        if dir_start > dir_end:
+            print('dir_start cannot be larger than dir_end. dir_start is set to 0.')
+            dir_start = 0
+
+        if Nevery > Nfreq:
+            print('Nevery cannot be larger than Nfreq. Nevery is set to Nfreq.')
+            Nevery = Nfreq
+
+        if Nevery > end:
+            print('Nevery cannot be larger than end. Nevery is set to end.')
+            Nevery = end
+
+        if Nfreq > end:
+            print('Nfreq cannot larger than end. Nfreq is set to end.')
+            Nfreq = end
 
         self.dirname_pattern = dirname_pattern
+        self.dir_start = dir_start
         self.dir_end = dir_end
         self.fname_pattern = fname_pattern
         self.Nevery = Nevery
         self.Nrepeat = Nrepeat
         self.Nfreq = Nfreq
         self.end = end
+        self.comm = comm
 
         self.source_dirs = []
-        for iind in range(dir_end + 1):
+        for iind in range(dir_start, dir_end + 1):
             self.source_dirs.append(dirname_pattern.format(iind))
 
-        self.freqs = [i*Nfreq for i in (np.arange(int(end/Nfreq)) + 1)]
+        self.freqs = np.linspace(Nfreq, end, int(end/Nfreq), dtype=int)
 
         fnames = []
-        fnames.append(glob.glob(os.path.join(self.source_dirs[0], self.fname_pattern.format(0)))[0])
+        if path is not None: 
+            fnames.append(glob.glob(os.path.join(path, self.source_dirs[0], self.fname_pattern.format(0)))[0])
+        else:
+            fnames.append(glob.glob(os.path.join(self.source_dirs[0], self.fname_pattern.format(0)))[0])
+
         for dir_ind, source_dir in enumerate(self.source_dirs):
+
+            ##
+            # This part is being used temporarily due to running short on disk space
+            #if dir_ind >= 20:
+            #    path = os.path.join('/data/N2022_f2550', os.path.basename(path))
+            ##
 
             for freq_ind, freq in enumerate(self.freqs):
                 patterns = [fname_pattern.format(i) for i in np.linspace(freq - self.Nevery*(self.Nrepeat -1), freq, self.Nrepeat, dtype=int)]
 
                 for pattern_ind, pattern in enumerate(patterns):
-                    fnames.append(glob.glob(os.path.join(source_dir, pattern))[0])
+                    if path is not None:
+                        fnames.append(glob.glob(os.path.join(path, source_dir, pattern))[0])
+                    else:
+                        fnames.append(glob.glob(os.path.join(source_dir, pattern))[0])
         
         self.fnames = fnames
+
+        f = open(self.fnames[0],'r')
+        box = []
+        for i in range(5):
+            f.readline()
+        for i in range(3):
+            line = f.readline().split()
+            box.append([float(line[0]), float(line[1])])
+        f.close()
+        self.box = box
 
     def run(self, protocols, comm=None):
         # TODO: run several functions on the trj at the same time
@@ -56,10 +94,10 @@ class dumpobj():
         for dir_ind, source_dir in enumerate(self.source_dirs):
 
             for freq_ind, freq in enumerate(self.freqs):
-                patterns = [fname_pattern.format(i) for i in np.linspace(freq - self.Nevery*(self.Nrepeat -1), freq, self.Nrepeat, dtype=int)]
+                patterns = [self.fname_pattern.format(i) for i in np.linspace(freq - self.Nevery*(self.Nrepeat -1), freq, self.Nrepeat, dtype=int)]
 
                 for pattern_ind, pattern in enumerate(patterns):
-                    fnames.append(glob.glob(os.path.join(source_dir, pattern))[0])
+                    fnames.append(os.path.join(source_dir, pattern))
 
         res = {}
         #if 'density' in protocol:
@@ -92,7 +130,7 @@ class dumpobj():
 
                 #density_tmp[iind] = c_density()  
 
-    def density(self, lx, ly, zlo, zhi, n_bins, comm):
+    def density(self, lx, ly, zlo, zhi, n_bins):
         self.lx = lx
         self.ly = ly
         self.zlo = zlo
@@ -100,9 +138,8 @@ class dumpobj():
         self.n_bins = n_bins
         self.bins = np.linspace(zlo, zhi, n_bins)
 
-        #comm = MPI.COMM_WORLD
-        size = comm.Get_size()
-        rank = comm.Get_rank()
+        size = self.comm.Get_size()
+        rank = self.comm.Get_rank()
 
         avg_rows_per_process = int(len(self.fnames)/size)
 
@@ -180,13 +217,13 @@ class dumpobj():
                     end_row = len(self.fnames)
 
                 recv = np.empty([len(self.fnames), self.n_bins - 1])
-                req = comm.Irecv(recv, source=iind)
+                req = self.comm.Irecv(recv, source=iind)
                 req.Wait()
 
                 density_tmp[start_row:end_row] = recv[start_row:end_row]
         else:
             send = density_tmp
-            req = comm.Isend(send, dest=0)
+            req = self.comm.Isend(send, dest=0)
             req.Wait()
 
         if rank == 0:
@@ -204,18 +241,19 @@ class dumpobj():
             
             cmaps = {}
             from matplotlib.colors import ListedColormap
-            W2B = np.dstack((np.linspace(1,0,256), np.linspace(1,0,256), np.linspace(1,0,256)))
+            #W2B = np.dstack((np.linspace(1,0,256), np.linspace(1,0,256), np.linspace(1,0,256)))
+            W2B = np.dstack((np.linspace(1,0,8), np.linspace(1,0,8), np.linspace(1,0,8)))
             cmaps['W2B'] = ListedColormap(W2B[0], name='W2B')
 
-            fig, ax = plt.subplots(figsize=(4, 3), dpi=1000)
+            fig, ax = plt.subplots(figsize=(4, 3))
             #plt.rc('font',size=9)
 
-            im = ax.imshow(density_final, vmin=0, vmax=0.5, cmap=cmaps['W2B'], origin='lower')
+            im = ax.imshow(density_final, vmin=0, vmax=0.8, cmap=cmaps['W2B'], origin='lower')
             ax.set_aspect('auto')
             divider = make_axes_locatable(ax)
             cax = divider.append_axes("right", size="5%", pad=0.05)
             cbar = fig.colorbar(im, cax=cax)
-            cbar.set_ticks([0, 0.5])
+            cbar.set_ticks([0, 0.8])
             cbar.set_label(r'density ($m/\sigma^{3}$)')
             xticks = np.linspace(0,len(self.source_dirs)*len(self.freqs),4)
             ax.set_xticks(xticks)
@@ -248,7 +286,7 @@ class dumpobj():
         
         return density
 
-    def local_fC(self, lx, ly, zlo, zhi, n_bins, comm):
+    def local_fC(self, lx, ly, zlo, zhi, n_bins):
         self.lx = lx
         self.ly = ly
         self.zlo = zlo
@@ -256,9 +294,8 @@ class dumpobj():
         self.n_bins = n_bins
         self.bins = np.linspace(zlo, zhi, n_bins)
 
-        #comm = MPI.COMM_WORLD
-        size = comm.Get_size()
-        rank = comm.Get_rank()
+        size = self.comm.Get_size()
+        rank = self.comm.Get_rank()
 
         avg_rows_per_process = int(len(self.fnames)/size)
 
@@ -336,13 +373,13 @@ class dumpobj():
                     end_row = len(self.fnames)
 
                 recv = np.empty([len(self.fnames), self.n_bins - 1])
-                req = comm.Irecv(recv, source=iind)
+                req = self.comm.Irecv(recv, source=iind)
                 req.Wait()
 
                 density_tmp[start_row:end_row] = recv[start_row:end_row]
         else:
             send = density_tmp
-            req = comm.Isend(send, dest=0)
+            req = self.comm.Isend(send, dest=0)
             req.Wait()
 
         if rank == 0:
@@ -365,7 +402,7 @@ class dumpobj():
             G2B = np.dstack((np.linspace(0,1,256), np.linspace(100/255,1,256), np.linspace(0,0,256)))
             cmaps['G2B'] = ListedColormap(G2B[0], name='G2B')
 
-            fig, ax = plt.subplots(figsize=(4, 3), dpi=1000)
+            fig, ax = plt.subplots(figsize=(4, 3))
             #plt.rc('font',size=9)
 
             im = ax.imshow(density_final, vmin=0, vmax=1.0, cmap=cmaps['G2B'], origin='lower')
@@ -406,7 +443,7 @@ class dumpobj():
         
         return fC
 
-    def orientation(self, lx, ly, zlo, zhi, n_bins, w, director, comm):
+    def orientation(self, lx, ly, zlo, zhi, n_bins, w, director):
         self.lx = lx
         self.ly = ly
         self.zlo = zlo
@@ -416,9 +453,8 @@ class dumpobj():
         self.director = np.asarray(director)
         #self.bins = np.linspace(zlo, zhi, n_bins)
 
-        #comm = MPI.COMM_WORLD
-        size = comm.Get_size()
-        rank = comm.Get_rank()
+        size = self.comm.Get_size()
+        rank = self.comm.Get_rank()
 
         if rank == 0:
             # number of bonds varies
@@ -459,7 +495,7 @@ class dumpobj():
         else:
             bonds = None
 
-        bonds = comm.bcast(bonds, root=0)
+        bonds = self.comm.bcast(bonds, root=0)
         self.bonds = bonds
 
         avg_rows_per_process = int(len(self.fnames)/size)
@@ -543,13 +579,13 @@ class dumpobj():
                     end_row = len(self.fnames)
 
                 recv = np.empty([len(self.fnames), self.n_bins])
-                req = comm.Irecv(recv, source=iind)
+                req = self.comm.Irecv(recv, source=iind)
                 req.Wait()
 
                 S_1D[start_row:end_row, :] = recv[start_row:end_row]
         else:
             send = S_tmp
-            req = comm.Isend(send, dest=0)
+            req = self.comm.Isend(send, dest=0)
             req.Wait()
 
         if rank == 0:
@@ -565,21 +601,30 @@ class dumpobj():
             S_final = np.vstack((S_initial, S_avg))
             S_final = S_final.transpose()
             
+            print(np.max(S_final), np.min(S_final))
+            
             cmaps = {}
             from matplotlib.colors import ListedColormap
-            R = np.concatenate((np.linspace(0,1,128), np.ones(128)))
-            G = np.concatenate((np.linspace(0,1,128), np.linspace(1,0,128)))
-            B = np.concatenate((np.ones(128), np.linspace(1,0,128)))
+            #R = np.concatenate((np.linspace(0,1,128), np.ones(128)))
+            #G = np.concatenate((np.linspace(0,1,128), np.linspace(1,0,128)))
+            #B = np.concatenate((np.ones(128), np.linspace(1,0,128)))
+            R = np.concatenate((np.linspace(0,1,85), np.ones(171)))
+            G = np.concatenate((np.linspace(0,1,85), np.linspace(1,0,171)))
+            B = np.concatenate((np.ones(85), np.linspace(1,0,171)))
+            R = np.concatenate((np.linspace(0,1,5), np.ones(10)))
+            G = np.concatenate((np.linspace(0,1,5), np.linspace(1,0,10)))
+            B = np.concatenate((np.ones(5), np.linspace(1,0,10)))
+
             BWR = np.dstack((R, G, B))
             cmaps['BWR'] = ListedColormap(BWR[0], name='BWR')
 
             fig, ax = plt.subplots(figsize=(4,3))
-            im = ax.imshow(S_final, vmin=-0.2, vmax=0.2, cmap=cmaps['BWR'], origin='lower')
+            im = ax.imshow(S_final, vmin=-0.5, vmax=1.0, cmap=cmaps['BWR'], origin='lower')
             ax.set_aspect('auto')
             divider = make_axes_locatable(ax)
             cax = divider.append_axes("right", size="5%", pad=0.05)
             cbar = fig.colorbar(im, cax=cax)
-            cbar.set_ticks([-0.2, 0, 0.2])
+            cbar.set_ticks([-0.5, 0, 1.0])
             cbar.set_label(r'$S$')
             xticks = np.linspace(0,len(self.source_dirs)*len(self.freqs),4)
             ax.set_xticks(xticks)
@@ -595,16 +640,23 @@ class dumpobj():
             return S_final
 
     def compute_cos(self, trj):
+        '''
+        Computes the position of the mid point of A-b-B chain
+        and the angle made by the AB vector and the director
+        '''
         
-        A = trj[self.bonds[:,2] - 1]
-        B = trj[self.bonds[:,3] - 1]
+        ind_A = self.bonds[:,2] - 1
+        ind_B = self.bonds[:,3] - 1
+
+        A = trj[ind_A - 3]
+        B = trj[ind_B + 3]
         
         #logic = np.logical_and(np.logical_and(A[:,4] > 5, B[:,4] > 5),(np.logical_and(A[:,4] < 25, B[:,4] < 25))) #
         #A = A[logic] #
         #B = B[logic] #
 
         d = self.d_pbc(A, B)
-        z_avg = (A[:,5] + B[:,5])/2
+        z_avg = (trj[ind_A,5] + trj[ind_B,5])/2
 
         cos = np.empty([len(self.bonds), 2])
         #cos = np.empty([A.shape[0], 2]) #
@@ -615,6 +667,9 @@ class dumpobj():
         return cos
 
     def compute_S(self, cos):
+        '''
+        Computes the Hermanns order parameter
+        '''
 
         bin_starts = np.linspace(self.zlo, self.zhi - self.w, self.n_bins)
         bin_ends = bin_starts + self.w
@@ -644,7 +699,7 @@ class dumpobj():
 
         return vector
 
-    def orientation_plane(self, lx, ly, zlo, zhi, n_bins, w, director, comm):
+    def orientation_plane(self, lx, ly, zlo, zhi, n_bins, w, director):
         self.lx = lx
         self.ly = ly
         self.zlo = zlo
@@ -654,13 +709,14 @@ class dumpobj():
         self.director = np.asarray(director)
         #self.bins = np.linspace(zlo, zhi, n_bins)
 
-        #comm = MPI.COMM_WORLD
-        size = comm.Get_size()
-        rank = comm.Get_rank()
+        size = self.comm.Get_size()
+        rank = self.comm.Get_rank()
 
         if rank == 0:
             #number of bonds varies
-            subprocess.Popen('grep -A 182401 "Bonds" equil_0/data_preequil > temp.txt', shell=True).wait()
+            #subprocess.Popen('grep -A 182401 "Bonds" equil_0/data_preequil > temp.txt', shell=True).wait()
+            subprocess.Popen('grep -A 276162 "Bonds" equil_0/data_preequil > temp.txt', shell=True).wait()
+
             bonds = np.loadtxt('temp.txt', skiprows=2)
             subprocess.Popen('rm temp.txt', shell=True).wait()
             bonds = bonds[(bonds[:,1] == 3) | (bonds[:,1] == 6)].astype(int)
@@ -669,7 +725,7 @@ class dumpobj():
         else:
             bonds = None
 
-        bonds = comm.bcast(bonds, root=0)
+        bonds = self.comm.bcast(bonds, root=0)
         self.bonds = bonds
 
         avg_rows_per_process = int(len(self.fnames)/size)
@@ -780,7 +836,7 @@ class dumpobj():
  
         return S
 
-    def segregation(self, blend, zlo, zhi, nx, ny, nz, w, comm):
+    def segregation(self, blend, zlo, zhi, nx, ny, nz, w):
         self.blend = blend
         self.zlo = zlo
         self.zhi = zhi
@@ -788,64 +844,25 @@ class dumpobj():
         self.w = w
         #self.bins = np.linspace(zlo, zhi, n_bins)
 
-        #comm = MPI.COMM_WORLD
-        size = comm.Get_size()
-        rank = comm.Get_rank()
+        size = self.comm.Get_size()
+        rank = self.comm.Get_rank()
 
-        if rank == 0:
-            infiles = glob.glob(os.path.join(self.source_dirs[0], self.fname_pattern.format(0)))
-            infiles.sort()
-
-            fname = infiles[0]
-            #print(fname)
-
-            f = open(fname,'r')
-            box = []
-            for i in range(5):
-                f.readline()
-            for i in range(3):
-                line = f.readline().split()
-                box.append([float(line[0]), float(line[1])])
-            f.close()
-            self.box = box
-
-            binary_3D_initial, delta_0 = self.binarize_3D_n(fname)
-
-            seg_initial = self.compute_segregation(binary_3D_initial)
-
-        else:
-            box = None
-
-        box = comm.bcast(box, root=0)
-        self.box = box
-
-        fnames = []
-        for dir_ind, source_dir in enumerate(self.source_dirs):
-
-            for freq_ind, freq in enumerate(self.freqs):
-                patterns = [self.fname_pattern.format(i) for i in np.linspace(freq - self.Nevery*(self.Nrepeat -1), freq, self.Nrepeat, dtype=int)]
-
-                for pattern_ind, pattern in enumerate(patterns):
-                    fnames.append(glob.glob(os.path.join(source_dir, pattern))[0])
-
-        avg_rows_per_process = int(len(fnames)/size)
-        
-        #print(avg_rows_per_process)
+        avg_rows_per_process = int(len(self.fnames)/size)
 
         start_row = rank * avg_rows_per_process
         end_row = start_row + avg_rows_per_process
         if rank == size - 1:
-            end_row = len(fnames)
-
+            end_row = len(self.fnames)
+        
         binary_3D =  {
                 'A': np.empty([ny, nx, nz]),
                 'B': np.empty([ny, nx, nz])
                 }
 
-        seg_tmp = np.empty([len(fnames), nz])
+        seg_tmp = np.empty([len(self.fnames), nz])
 
         for iind in range(start_row, end_row):
-            tmp, delta = self.binarize_3D_n(fnames[iind])
+            tmp, delta = self.binarize_3D_n(self.fnames[iind])
             binary_3D['A'] = tmp['A']
             binary_3D['B'] = tmp['B']
 
@@ -853,27 +870,28 @@ class dumpobj():
             seg_tmp[iind, :] = tmp
 
         if rank == 0:
-            seg_1D = np.empty([len(fnames), nz])
+            seg_1D = np.empty([len(self.fnames), nz])
             seg_1D[start_row:end_row, :] = seg_tmp[start_row:end_row]
 
             for iind in range(1, size):
                 start_row = iind*avg_rows_per_process
                 end_row = start_row + avg_rows_per_process
                 if iind == size - 1:
-                    end_row = len(fnames)
+                    end_row = len(self.fnames)
 
-                recv = np.empty([len(fnames), nz])
-                req = comm.Irecv(recv, source=iind)
+                recv = np.empty([len(self.fnames), nz])
+                req = self.comm.Irecv(recv, source=iind)
                 req.Wait()
 
                 seg_1D[start_row:end_row, :] = recv[start_row:end_row]
         else:
             send = seg_tmp
-            req = comm.Isend(send, dest=0)
+            req = self.comm.Isend(send, dest=0)
             req.Wait()
 
         if rank == 0:
-            seg_all = seg_1D.reshape(len(self.source_dirs), len(self.freqs), self.Nrepeat, nz)
+            seg_initial = seg_1D[0]
+            seg_all = seg_1D[1:].reshape(len(self.source_dirs), len(self.freqs), self.Nrepeat, nz)
             seg_avg = np.empty([len(self.source_dirs), len(self.freqs), nz])
 
             for dir_ind, source_dir in enumerate(self.source_dirs):
@@ -883,8 +901,6 @@ class dumpobj():
             seg_avg = seg_avg.reshape(-1, nz)
             seg_final = np.vstack((seg_initial, seg_avg))
             seg_final = seg_final.transpose()
-
-            #print(seg_final.shape)
 
             cmaps = {}
             from matplotlib.colors import ListedColormap
@@ -927,6 +943,10 @@ class dumpobj():
         fA_bins = np.linspace(0, 1, 21)
         hist, bin_edges = np.histogram(seg_1D, bins=fA_bins)
         fA = bin_edges[1:] - (bin_edges[1] - bin_edges[0])/2
+
+        fig, ax = plt.subplots(figsize=(4,3))
+        ax.plot(fA, hist)
+        plt.savefig('fA.png', dpi=500)  
 
         fA_evol = hist/len(seg_1D)
 
@@ -1006,7 +1026,7 @@ class dumpobj():
 
         return binary, delta
 
-    def chisq(self, blend, delta, run_args, comm, **kwargs):
+    def chisq(self, blend, delta, run_args, **kwargs):
 
         self.blend = blend
         self.delta = delta
@@ -1017,9 +1037,8 @@ class dumpobj():
             else:
                 self.phase = [i[1] for i in run_args['phase']]
 
-        #comm = MPI.COMM_WORLD
-        size = comm.Get_size()
-        rank = comm.Get_rank()
+        size = self.comm.Get_size()
+        rank = self.comm.Get_rank()
 
         if rank == 0:
  
@@ -1048,8 +1067,8 @@ class dumpobj():
             box = None
             dims = None
 
-        box = comm.bcast(box, root=0)
-        dims = comm.bcast(dims, root=0)
+        box = self.comm.bcast(box, root=0)
+        dims = self.comm.bcast(dims, root=0)
         self.box = box
         self.dims = dims
  
@@ -1121,7 +1140,7 @@ class dumpobj():
             trj = trj[np.argsort(trj[:,0])]
             trj[:,5] = trj[:,5] - self.box[2][0]
 
-            topview[iind] = self.view_xy(self.binarize_3D(trj)).reshape(-1)
+            topview[iind] = self.view_xy(self.binarize_3D(trj)).reshape(-1) #with custom bin
 
             del trj
 
@@ -1135,7 +1154,7 @@ class dumpobj():
 
                 #recv = np.empty([len(fnames), self.dims['h'], self.dims['w']])
                 recv = np.empty([len(self.fnames), self.dims['h'] * self.dims['w']])
-                req = comm.Irecv(recv, source=iind)
+                req = self.comm.Irecv(recv, source=iind)
                 req.Wait()
 
                 topview[start_row:end_row] = recv[start_row:end_row]
@@ -1147,7 +1166,7 @@ class dumpobj():
             send = np.empty([len(self.fnames), self.dims['h'] * self.dims['w']])
             for iind in range(start_row, end_row):
                 send[iind] = topview[iind]
-            req = comm.Isend(send, dest=0)
+            req = self.comm.Isend(send, dest=0)
             req.Wait()
 
             del send
@@ -1173,7 +1192,7 @@ class dumpobj():
         else:
             topview_final = None
 
-        topview_final = comm.bcast(topview_final, root=0)
+        topview_final = self.comm.bcast(topview_final, root=0)
 
         avg_rows_per_process = int(len(topview_final)/size)
         
@@ -1196,13 +1215,13 @@ class dumpobj():
                     end_row = len(topview_final)
 
                 recv = np.empty(len(topview_final))
-                req = comm.Irecv(recv, source=iind)
+                req = self.comm.Irecv(recv, source=iind)
                 req.Wait()
 
                 chisq[start_row:end_row] = recv[start_row:end_row]
         else:
             send = chisq
-            req = comm.Isend(send, dest=0)
+            req = self.comm.Isend(send, dest=0)
             req.Wait()
 
         if rank == 0:
@@ -1211,6 +1230,7 @@ class dumpobj():
 
             np.savetxt('chisq.txt', chisq)
 
+            '''
             fig, ax = plt.subplots(figsize=(4,3))
             ax.plot(chisq)
             #ax.set_aspect('auto')
@@ -1223,9 +1243,11 @@ class dumpobj():
             ax.set_ylim(0, 1000000)
             plt.tight_layout(pad=1,h_pad=None,w_pad=None,rect=None)
             plt.savefig('chisq.png', dpi=1000)
+            '''
 
     def binarize_3D(self, trj):
 
+        '''
         binary = np.empty([
             int((self.box[1][1] - self.box[1][0])/self.delta[1]),
             int((self.box[0][1] - self.box[0][0])/self.delta[0]),
@@ -1243,6 +1265,22 @@ class dumpobj():
             q[1] = int((trj_filter[iind,3]%(self.box[0][1]-self.box[0][0]))//self.delta[0])
             q[2] = int((trj_filter[iind,5]%(self.box[2][1]-self.box[2][0]))//self.delta[2])
             binary[q[0], q[1], q[2]] = 1
+        '''
+        delta = self.delta
+        box = self.box
+        blend = self.blend
+
+        binx = np.linspace(box[0][0], box[0][1], int((box[0][1]-box[0][0])/delta[0])+1)
+        biny = np.linspace(box[1][0], box[1][1], int((box[1][1]-box[1][0])/delta[1])+1)
+        binz = np.linspace(0, math.ceil(max(trj[:,5])), int(math.ceil(max(trj[:,5]))/delta[2])+1)
+
+        if blend == 1:
+            # bead types
+            trj_filter = trj[(trj[:,2] == 1) | (trj[:,2] == 3)]
+        else:
+            trj_filter = trj[trj[:,2] == 1]
+
+        binary = stats.binned_statistic_dd(trj_filter[:,[4, 3, 5]], np.ones(trj_filter.shape[0]), statistic='count', bins=[biny, binx, binz]).statistic
 
         return binary
 
@@ -1273,7 +1311,7 @@ class dumpobj():
         q_del_px = 2*math.pi/fft_resolution
         q_del = q_del_px*self.scale
 
-        q = np.linspace(-3.0, 3.0, 7)
+        q = np.linspace(-1.5, 1.5, 7)
         qq_x = fft_resolution//2 + q/q_del
         qq_y = fft_resolution//2 + q/q_del
 
@@ -1283,15 +1321,15 @@ class dumpobj():
         #magnitude_spectrum_shift = 20*np.log(np.abs(fshift))
         #magnitude_spectrum_shift = np.log(np.abs(fshift))
 
-        x = np.linspace(0, self.dims['w']-1, self.dims['w'])
-        y = np.linspace(0, self.dims['h']-1, self.dims['h'])
-        z = magnitude_spectrum_shift
+        x = np.linspace(0, self.dims['w']-2, self.dims['w']-1)
+        y = np.linspace(0, self.dims['h']-2, self.dims['h']-1)
+        z = magnitude_spectrum_shift[1:self.dims['h'],1:self.dims['w']]
 
         from scipy import interpolate
         f = interpolate.interp2d(x, y, z, kind='linear')
 
-        xnew = np.linspace(0,self.dims['w']-1,fft_resolution)
-        ynew = np.linspace(0,self.dims['h']-1,fft_resolution)
+        xnew = np.linspace(0,self.dims['w']-2,fft_resolution+1)
+        ynew = np.linspace(0,self.dims['h']-2,fft_resolution+1)
         znew = f(xnew, ynew)
 
         fig=plt.figure(figsize=(4,3))
@@ -1306,7 +1344,7 @@ class dumpobj():
         ax.set_xlabel(r'$q_{x}$ (1/$\sigma$)')
         ax.set_ylabel(r'$q_{y}$ (1/$\sigma$)')
         plt.tight_layout(pad=1, h_pad=None, w_pad=None, rect=None)
-        plt.savefig('{}_2Dfft.png'.format(num), dpi=1000)
+        plt.savefig('{}_2Dfft.png'.format(num), dpi=500)
         #plt.savefig(os.path.join(self.path, 'results', 'MD_fft_interpolated.png'), dpi=1000)
         plt.close()
 
@@ -1325,12 +1363,13 @@ class dumpobj():
         f = lambda r : znew_zoomed[(R >= r-.5) & (R < r+.5)].mean()
         r = np.linspace(1, fft_resolution//(2*zoom_mag), fft_resolution//(2*zoom_mag))
         mean = np.vectorize(f)(r)
+        mean *= r**3
 
         r *= self.scale # Scale r to convert distance to pixel
 
         " Fit a gaussian plus line curve to I-q "
-        left_ind = 30
-        right_ind = 120
+        left_ind = 30#30
+        right_ind = 200#120
         x = r[left_ind:right_ind]
         y = mean[left_ind:right_ind]
 
@@ -1364,14 +1403,13 @@ class dumpobj():
             #print ('L0 = %.4f' % l0)
             #print ('L0_std = %.4f' % (l0 - l0_minus_sigma))
 
-            fig=plt.figure(figsize=(4,3))
-            ax = fig.add_subplot(111)
+            fig, ax = plt.subplots(figsize=(4,3))
             ax.plot(r*q_del_px, mean, 'o', mec='None', ms=2)
             ax.plot(x*q_del_px, gaussian_plus_line(mi.params, x), 'r-')
             ax.set_xlabel(r'$q$ (1/px)')
             ax.set_ylabel(r'$I$ (a.u.)')
             plt.tight_layout(pad=1, h_pad=None, w_pad=None, rect=None)
-            plt.savefig('{}_1Dfft.png'.format(num), dpi=1000)
+            plt.savefig('{}_1Dfft_fit.png'.format(num), dpi=500)
             #plt.savefig(os.path.join(self.path, 'results', 'Iq.png'), dpi=1000)
             plt.close()
 
@@ -1385,14 +1423,14 @@ class dumpobj():
             self.l0 = 15.0
             self.l0_std = 0.0
 
-    def position(self, comm):
+    def position(self):
 
         #moi
         #molnumber, N, fA
         mol_of_interest = np.loadtxt('moi.txt')
 
-        size = comm.Get_size()
-        rank = comm.Get_rank()
+        size = self.comm.Get_size()
+        rank = self.comm.Get_rank()
 
         avg_rows_per_process = int(len(self.fnames)/size)
 
@@ -1412,13 +1450,13 @@ class dumpobj():
                     end_row = len(self.fnames)
 
                 recv = np.empty([len(self.fnames), mol_of_interest.shape[0]])
-                req = comm.Irecv(recv, source=iind)
+                req = self.comm.Irecv(recv, source=iind)
                 req.Wait()
 
                 position_z[start_row:end_row] = recv[start_row:end_row]
         else:
-            send = density_tmp
-            req = comm.Isend(send, dest=0)
+            send = position_z
+            req = self.comm.Isend(send, dest=0)
             req.Wait()
 
         if rank == 0:
@@ -1433,7 +1471,7 @@ class dumpobj():
             position_z_avg = position_z_avg.reshape(-1, mol_of_interest.shape[0])
             position_z_final = np.vstack((position_z_initial, position_z_avg))
 
-            fig, ax = plt.subplots(figsize=(4, 3), dpi=1000)
+            fig, ax = plt.subplots(figsize=(4, 3))
             #plt.rc('font',size=9)
 
             ax.plot(position_z_final[:, 0], position_z_final[:, 1])
@@ -1449,3 +1487,250 @@ class dumpobj():
             plt.tight_layout(pad=1,h_pad=None,w_pad=None,rect=None)
             plt.savefig("position.png", dpi=1000)
 
+    def concentration(self, lx, ly, z_max, phase):
+
+        size = self.comm.Get_size()
+        rank = self.comm.Get_rank()
+
+        avg_rows_per_process = int(len(self.fnames)/size)
+
+        start_row = rank * avg_rows_per_process
+        end_row = start_row + avg_rows_per_process
+        if rank == size - 1:
+            end_row = len(self.fnames)
+
+        binz = np.linspace(0, z_max, z_max+1)
+        concentration_tmp = np.empty((len(self.fnames), z_max))
+        for iind in range(start_row, end_row):
+
+            try:
+
+                trj = np.loadtxt(self.fnames[iind], skiprows=9)
+
+                f = open(self.fnames[iind],'r')
+                for i in range(3):
+                    f.readline()
+                n_atoms = int(f.readline().split()[0])
+                f.close()
+
+                #print(n_atoms)
+
+                flag = 0
+                shift = 1
+                while (flag == 0):
+                    if trj.shape[0] != n_atoms:
+                        trj = np.loadtxt(self.fnames[iind - shift], skiprows=9)
+
+                        f = open(self.fnames[iind - shift],'r')
+                        for i in range(3):
+                            f.readline()
+                        n_atoms = int(f.readline().split()[0])
+                        f.close()
+
+                        shift +=1 
+                        
+                    else:
+                        flag = 1
+
+            except:
+                'empty dump files can be created due to storage limit'
+
+                flag = 0
+                shift = 1
+                while (flag == 0):
+
+                    try:
+                        trj = np.loadtxt(self.fnames[iind - shift], skiprows=9)
+
+                        f = open(self.fnames[iind - shift],'r')
+                        for i in range(3):
+                            f.readline()
+                        n_atoms = int(f.readline().split()[0])
+                        f.close()
+
+                        if trj.shape[0] == n_atoms:
+                            flag = 1
+                        else:
+                            shift += 1
+
+                    except:
+                        shift += 1
+
+            if phase == 'C':
+                logic = trj[:,2] < 3
+            elif phase == 'L':
+                logic = np.logical_and(trj[:,2] > 2, trj[:,2] < 5)
+            concentration_tmp[iind] = stats.binned_statistic_dd(trj[logic,5], None, statistic='count', bins=[binz]).statistic
+
+            del trj
+
+        if rank == 0:
+
+            for iind in range(1, size):
+                start_row = iind*avg_rows_per_process
+                end_row = start_row + avg_rows_per_process
+                if iind == size - 1:
+                    end_row = len(self.fnames)
+
+                recv = np.empty((len(self.fnames), z_max))
+                req = self.comm.Irecv(recv, source=iind)
+                req.Wait()
+
+                concentration_tmp[start_row:end_row] = recv[start_row:end_row]
+        else:
+            send = concentration_tmp
+            req = self.comm.Isend(send, dest=0)
+            req.Wait()
+
+        if rank == 0:
+            concentration_initial = concentration_tmp[0]
+            concentration_all = concentration_tmp[1:].reshape(len(self.source_dirs), len(self.freqs), self.Nrepeat, z_max)
+            concentration_avg = np.empty((len(self.source_dirs), len(self.freqs), z_max))
+
+            for dir_ind, source_dir in enumerate(self.source_dirs):
+                for freq_ind, freq in enumerate(self.freqs):
+                    concentration_avg[dir_ind, freq_ind, :] = concentration_all[dir_ind, freq_ind, :, :].mean(axis=0)
+
+            concentration_avg = concentration_avg.reshape(-1, z_max)
+            concentration_final = np.vstack((concentration_initial, concentration_avg))
+            concentration_final = concentration_final.transpose()
+            concentration_final /= lx*ly
+
+            fig, ax = plt.subplots(figsize=(4,3))
+            ax.set_aspect('equal', adjustable='box')
+            ax.imshow(concentration_final, origin='lower')
+            plt.tight_layout(pad=1,h_pad=None,w_pad=None,rect=None)
+            plt.savefig('result.png', dpi=500)
+            plt.close()
+
+            t = np.linspace(0, concentration_final.shape[1]-1, concentration_final.shape[1])
+            tt, zz = np.meshgrid(t-0.5, np.linspace(0, z_max-1, z_max))
+            concentration_ = concentration_final.ravel()
+            t_ = tt.ravel()
+            z_ = zz.ravel()
+
+            grad = np.gradient(concentration_final, t, axis=1)
+            grad_ = grad.ravel()
+
+            from mpl_toolkits.mplot3d import Axes3D
+            fig = plt.figure()
+            ax = fig.add_subplot(111, projection='3d')
+            ax.bar3d(t_, z_, 0, 1, 1, concentration_)
+            #ax.plot_surface(tt, zz, concentration_final, cmap='viridis', edgecolor='None')
+            #ax.contour3D(tt, zz, concentration_final, 50)
+            ax.view_init(30, 120)
+            xticks = np.linspace(0, len(self.source_dirs)*len(self.freqs), 4)
+            xticklabels = [format(i*self.Nfreq*0.006*pow(10,-6), '.4f') for i in xticks]
+            ax.set_xlim(xticks[-1]+0.5, xticks[0]-0.5)
+            ax.set_xticks(xticks)
+            ax.set_xticklabels(xticklabels)
+            ax.set_xlabel(r'$t/\mathrm{M}\tau$')
+            ax.set_ylim(0-0.5, 69+0.5)
+            #ax.set_ylim(69+.5, 0-0.5)
+            ax.set_yticks(np.linspace(0, 70, 5)) 
+            ax.set_ylabel(r'$z/\sigma$')
+            ax.set_zlim(0, 0.85)
+            ax.set_zlabel(r'concentration/$\sigma^{-3}$')
+            plt.savefig('result_3d.png', dpi=500)
+
+            '''  
+            from mpl_toolkits.axes_grid1 import make_axes_locatable
+            from matplotlib.colors import ListedColormap
+            import matplotlib.colors as colors
+            R = np.concatenate((np.linspace(0,1,128), np.ones(128)))
+            G = np.concatenate((np.linspace(0,1,128), np.linspace(1,0,128)))
+            B = np.concatenate((np.ones(128), np.linspace(1,0,128)))
+            BWR = np.dstack((R, G, B))
+            cmaps = {}
+            cmaps['BWR'] = ListedColormap(BWR[0], name='BWR')
+
+            fig = plt.figure(figsize=(4,3))
+            ax = fig.add_subplot(111)
+            #ax.bar3d(t_, z_, 0, 1, 1, grad_)
+            #ax.view_init(30, 120)
+            #im = ax.imshow(grad, origin='lower', vmin=-0.5, vmax=0.5, cmap=cmaps['BWR'])
+            im = ax.imshow(grad, norm=colors.SymLogNorm(linthresh=0.001, linscale=0.001, vmin=-0.5, vmax=0.5, base=10), origin='lower', cmap=cmaps['BWR'])
+            ax.set_aspect('auto')
+            divider = make_axes_locatable(ax)
+            cax = divider.append_axes("right", size="5%", pad=0.05)
+            cbar = fig.colorbar(im, cax=cax)
+            cbar.set_ticks([-0.1, -0.01, -0.001, 0.01, 0.1])
+            cbar.set_ticklabels([r'$-10^{-1}$', r'$-10^{-2}$', r'$-10^{\pm3}$', r'$10^{-2}$', r'$10^{-1}$'])
+            cbar.set_label(r'slope')
+            xticks = np.linspace(0, len(self.source_dirs)*len(self.freqs), 4)
+            xticklabels = [format(i*self.Nfreq*0.006*pow(10,-6), '.4f') for i in xticks]
+            ax.set_xlim(xticks[0]-0.5, xticks[-1]+0.5)
+            ax.set_xticks(xticks)
+            ax.set_xticklabels(xticklabels)
+            ax.set_xlabel(r'$t/\mathrm{M}\tau$')
+            ax.set_ylim(0-0.5, 69+0.5)
+            ax.set_yticks(np.linspace(0, 70, 5)) 
+            ax.set_ylabel(r'$z/\sigma$')
+            ax.set_ylabel(r'$z/\sigma$')
+            #ax.set_zlabel(r'concentration/$\sigma^{-3}$')
+            plt.tight_layout(pad=1,h_pad=None,w_pad=None,rect=None)
+            plt.savefig('result_grad_3d.png', dpi=500)
+            '''
+
+            save = {}
+            save.update({'tt': tt})
+            save.update({'zz': zz})
+            save.update({'concentration': concentration_final})
+            save.update({'xticks': xticks})
+            save.update({'xticklabels': xticklabels})
+            
+            np.save('save.npy', save, allow_pickle=True)
+
+    def sf(self, types, n, L=None):
+        box = []
+        f = open(self.fnames[0], 'r')
+        for i in range(5):
+            f.readline()
+        for i in range(3):
+            line = f.readline().split()
+            box.append([float(line[0]), float(line[1])])
+        f.close()
+
+        if L is None:
+            L = max([box[0][1]-box[0][0], box[1][1]-box[1][0]])
+
+        trj = np.loadtxt(self.fnames[0], skiprows=9)
+        trj = trj[np.argsort(trj[:,0])]
+        if len(types)==1:
+            logic = trj[:,2]==types[0]
+        else:
+            logic = trj[:,2]==types[0]
+            for i in range(1,len(types)):
+                logic = np.logical_or(logic, trj[:,2]==types[i])
+        num_atoms = len(trj[logic])
+
+        f = open('inc.parameters', 'w')
+        f.write('C parameters\n')
+        f.write('        parameter (num_atoms=%d)\n' %num_atoms)
+        f.write('        parameter (n=%d)\n' %n)
+        f.write('        parameter (L=%f)\n' %L)
+        f.close()
+
+        for ind, fname in enumerate(self.fnames):
+            trj = np.loadtxt(fname, skiprows=9)
+            trj = trj[np.argsort(trj[:,0])]
+            trj = trj[logic]
+
+            f = open('dump_temp', 'w')
+            f.write('ITEM: TIMESTEP\n')
+            f.write('0\n')
+            f.write('ITEM: NUMBER OF ATOMS\n')
+            f.write('0\n')
+            f.write('ITEM: BoX BOUNDS pp pp ff\n')
+            f.write('0 0\n')
+            f.write('0 0\n')
+            f.write('0 0\n')
+            f.write('ITEM: ATOMS id mol type x y z\n')
+            for line in trj:
+                f.write('%d\t%d\t%d\t%s\t%s\t%s\n' %(line[0], line[1], line[2], line[3], line[4], line[5]))
+            f.close()
+            
+            subprocess.Popen('mpif90 sf_mpi.f', shell=True).wait()
+            time.sleep(2)
+            subprocess.Popen('mpirun -np 32 ./a.out', shell=True).wait()
+            os.rename('sq.txt', 'sq_{}'.format(fname.split('.')[-1]))
