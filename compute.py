@@ -8,6 +8,7 @@ import math
 import time
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+from numpy.lib.function_base import select
 from scipy import stats
 
 try:
@@ -86,53 +87,14 @@ class dumpobj():
             box.append([float(line[0]), float(line[1])])
         f.close()
         self.box = box
+        self.lx = box[0][1] - box[0][0]
+        self.ly = box[1][1] - box[1][0]
 
     def run(self, protocols, comm=None):
         # TODO: run several functions on the trj at the same time
-
         fnames = []
-        for dir_ind, source_dir in enumerate(self.source_dirs):
 
-            for freq_ind, freq in enumerate(self.freqs):
-                patterns = [self.fname_pattern.format(i) for i in np.linspace(freq - self.Nevery*(self.Nrepeat -1), freq, self.Nrepeat, dtype=int)]
-
-                for pattern_ind, pattern in enumerate(patterns):
-                    fnames.append(os.path.join(source_dir, pattern))
-
-        res = {}
-        #if 'density' in protocol:
-        #    res.update({
-        #        'density':
-        #        })
-
-        if comm is not None:
-            size = comm.Get_size()
-            rank = comm.Get_rank()
-        
-            avg_rows_per_process = int(len(fnames)/size)
-        
-            start_row = rank * avg_rows_per_process
-            end_row = start_row + avg_rows_per_process
-            if rank == size - 1:
-                end_row = len(fnames)
-    
-            #if rank == 0:
-
-            density_tmp = np.empty([len(fnames), self.n_bins - 1])
-
-            for iind in range(start_row, end_row):
-                fname = fnames[iind]
-                trj = np.loadtxt(fname, skiprows=9)
-                trj = trj[np.argsort(trj[:,0])]
-
-                #if protocols is not None:
-                    #for protocol in protocols: 
-
-                #density_tmp[iind] = c_density()  
-
-    def density(self, lx, ly, zlo, zhi, n_bins):
-        self.lx = lx
-        self.ly = ly
+    def density(self, zlo, zhi, n_bins):
         self.zlo = zlo
         self.zhi = zhi
         self.n_bins = n_bins
@@ -443,9 +405,7 @@ class dumpobj():
         
         return fC
 
-    def orientation(self, lx, ly, zlo, zhi, n_bins, w, director):
-        self.lx = lx
-        self.ly = ly
+    def orientation(self, zlo, zhi, n_bins, w, director):
         self.zlo = zlo
         self.zhi = zhi
         self.n_bins = n_bins
@@ -699,9 +659,7 @@ class dumpobj():
 
         return vector
 
-    def orientation_plane(self, lx, ly, zlo, zhi, n_bins, w, director):
-        self.lx = lx
-        self.ly = ly
+    def orientation_plane(self, zlo, zhi, n_bins, w, director):
         self.zlo = zlo
         self.zhi = zhi
         self.n_bins = n_bins
@@ -984,14 +942,14 @@ class dumpobj():
                 )
 
         delta = [0, 0, 0]
-        delta[0] = (self.box[0][1] - self.box[0][0])/self.bins[0]
-        delta[1] = (self.box[1][1] - self.box[1][0])/self.bins[1] 
+        delta[0] = self.lx/self.bins[0]
+        delta[1] = self.ly/self.bins[1] 
         delta[2] = self.w
 
         #print(delta)
 
         trjs_filter = {}
-        if self.blend == 1:
+        if self.blend:
             trjs_filter.update(
                     {'A': trj[(trj[:,2] == 1) | (trj[:,2] == 3)]}
                     )
@@ -1274,7 +1232,7 @@ class dumpobj():
         biny = np.linspace(box[1][0], box[1][1], int((box[1][1]-box[1][0])/delta[1])+1)
         binz = np.linspace(0, math.ceil(max(trj[:,5])), int(math.ceil(max(trj[:,5]))/delta[2])+1)
 
-        if blend == 1:
+        if blend:
             # bead types
             trj_filter = trj[(trj[:,2] == 1) | (trj[:,2] == 3)]
         else:
@@ -1682,17 +1640,9 @@ class dumpobj():
             np.save('save.npy', save, allow_pickle=True)
 
     def sf(self, types, n, L=None):
-        box = []
-        f = open(self.fnames[0], 'r')
-        for i in range(5):
-            f.readline()
-        for i in range(3):
-            line = f.readline().split()
-            box.append([float(line[0]), float(line[1])])
-        f.close()
 
         if L is None:
-            L = max([box[0][1]-box[0][0], box[1][1]-box[1][0]])
+            L = max(self.lx, self.ly)
 
         trj = np.loadtxt(self.fnames[0], skiprows=9)
         trj = trj[np.argsort(trj[:,0])]
@@ -1733,4 +1683,4 @@ class dumpobj():
             subprocess.Popen('mpif90 sf_mpi.f', shell=True).wait()
             time.sleep(2)
             subprocess.Popen('mpirun -np 32 ./a.out', shell=True).wait()
-            os.rename('sq.txt', 'sq_{}'.format(fname.split('.')[-1]))
+            os.rename('sq.txt', 'sq_{}.txt'.format(fname.split('.')[-1]))
