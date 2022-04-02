@@ -266,18 +266,12 @@ class dumpobj():
             req.Wait()
 
         if rank == 0:
-            density_initial = density_tmp[0]
-            density_all = density_tmp[1:].reshape(len(self.source_dirs), len(self.freqs), self.Nrepeat, n_bins - 1)
-            density_avg = np.empty([len(self.source_dirs), len(self.freqs), n_bins - 1])
-
-            for dir_ind, source_dir in enumerate(self.source_dirs):
-                for freq_ind, freq in enumerate(self.freqs):
-                    density_avg[dir_ind, freq_ind, :] = density_all[dir_ind, freq_ind, :, :].mean(axis=0)
-
-            density_avg = density_avg.reshape(-1, self.n_bins - 1)
-            density_final = np.vstack((density_initial, density_avg))
-            density_final = density_final.transpose()
             
+            rho = Data.Data_TimeSeries(density_tmp, self.Nrepeat)
+
+            density_final = rho.mean
+            density_final = density_final.transpose()
+                        
             res = Data.Data2D(z=density_final)
             xticks = np.linspace(0,len(self.source_dirs)*len(self.freqs),4) 
             plot_args = {
@@ -640,16 +634,10 @@ class dumpobj():
             req.Wait()
 
         if rank == 0:
-            S_initial = S_1D[0]
-            S_all = S_1D[1:].reshape(len(self.source_dirs), len(self.freqs), self.Nrepeat, n_bins)
-            S_avg = np.empty([len(self.source_dirs), len(self.freqs), n_bins])
 
-            for dir_ind, source_dir in enumerate(self.source_dirs):
-                for freq_ind, freq in enumerate(self.freqs):
-                    S_avg[dir_ind, freq_ind, :] = S_all[dir_ind, freq_ind, :, :].mean(axis=0)
-
-            S_avg = S_avg.reshape(-1, self.n_bins)
-            S_final = np.vstack((S_initial, S_avg))
+            op = Data.Data_TimeSeries(S_1D, self.Nrepeat)
+            
+            S_final = op.mean
             S_final = S_final.transpose()
             
             print(np.max(S_final), np.min(S_final))
