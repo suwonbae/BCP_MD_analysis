@@ -22,7 +22,7 @@ except:
 
 class dumpobj():
 
-    def __init__(self, path=None, dirname_pattern='equil_{}', dir_start=0, dir_end=0, fname_pattern='dump*.{}', Nevery=10000, Nrepeat=1, Nfreq=10000, end=10000, comm=None):
+    def __init__(self, path=None, dirname_pattern='equil_{}', dir_start=0, dir_end=0, fname_pattern='dump*.{}', Nevery=10000, Nrepeat=1, Nfreq=10000, end=10000, timestep=0.006, comm=None):
 
         if dir_start > dir_end:
             print('dir_start cannot be larger than dir_end. dir_start is set to 0.')
@@ -51,6 +51,11 @@ class dumpobj():
         self.end = end
         self.comm = comm
 
+        self.timestep = timestep
+        self.results = {
+                'timestep': timestep
+                }
+
         self.source_dirs = []
         for iind in range(dir_start, dir_end + 1):
             self.source_dirs.append(dirname_pattern.format(iind))
@@ -65,6 +70,7 @@ class dumpobj():
             fnames.append(glob.glob(os.path.join(path, self.source_dirs[0], self.fname_pattern.format(0)))[0])
         buff_path = path
 
+        steps = [0]
         for dir_ind, source_dir in enumerate(self.source_dirs):
 
             ##
@@ -83,8 +89,12 @@ class dumpobj():
                         fnames.append(glob.glob(os.path.join(path, source_dir, pattern))[0])
                     else:
                         fnames.append(glob.glob(os.path.join(source_dir, pattern))[0])
+                
+                steps.append((dir_start + dir_ind)*end + freq)
         
         self.fnames = fnames
+        self.steps = np.asarray(steps)
+        self.results.update({'steps': np.asarray(steps)})
 
         rank = self.comm.Get_rank()
 
@@ -140,6 +150,10 @@ class dumpobj():
         self.box = comm.bcast(self.box, root=0)
         self.lx = comm.bcast(self.lx, root=0)
         self.ly = comm.bcast(self.ly, root=0)
+
+    def save_results(self):
+        if self.comm.rank == 0:
+            np.save('results.npy', self.results)
 
     def specify_timesteps(self, timesteps):
         '''
@@ -533,8 +547,8 @@ class dumpobj():
             bonds = np.loadtxt('temp.txt', skiprows=2)
             os.remove('temp.txt')
             # choose bridge bonds between blocks
-            bonds = bonds[(bonds[:,1] == 3) | (bonds[:,1] == 6)].astype(int)
-            #bonds = bonds[bonds[:,1] == 3].astype(int)
+            #bonds = bonds[(bonds[:,1] == 3) | (bonds[:,1] == 6)].astype(int)
+            bonds = bonds[bonds[:,1] == 3].astype(int)
             self.bonds = bonds
 
         else:
@@ -644,12 +658,9 @@ class dumpobj():
             
             cmaps = {}
             from matplotlib.colors import ListedColormap
-            #R = np.concatenate((np.linspace(0,1,128), np.ones(128)))
-            #G = np.concatenate((np.linspace(0,1,128), np.linspace(1,0,128)))
-            #B = np.concatenate((np.ones(128), np.linspace(1,0,128)))
-            R = np.concatenate((np.linspace(0,1,85), np.ones(171)))
-            G = np.concatenate((np.linspace(0,1,85), np.linspace(1,0,171)))
-            B = np.concatenate((np.ones(85), np.linspace(1,0,171)))
+            #R = np.concatenate((np.linspace(0,1,85), np.ones(171)))
+            #G = np.concatenate((np.linspace(0,1,85), np.linspace(1,0,171)))
+            #B = np.concatenate((np.ones(85), np.linspace(1,0,171)))
             R = np.concatenate((np.linspace(0,1,5), np.ones(10)))
             G = np.concatenate((np.linspace(0,1,5), np.linspace(1,0,10)))
             B = np.concatenate((np.ones(5), np.linspace(1,0,10)))
@@ -680,6 +691,165 @@ class dumpobj():
             plt.savefig('angle_map.png', dpi=1000) 
 
             return S_final
+
+    def alignment_chain(self, zhi, director, zlo=0):
+        self.director = np.asarray(director)
+
+        bins = np.linspace(0, 180, 72+1)
+
+        size = self.comm.Get_size()
+        rank = self.comm.Get_rank()
+
+        if rank == 0:
+            # number of bonds varies
+            path = 'equil_0'
+            files = [f for f in os.listdir(path) if 'data' in f]
+            path_to_file = os.path.join(path, files[0])
+
+            print('* Chain geometry info extracted')
+            print('* path_to_file: {}'.format(path_to_file))
+
+            f = open(path_to_file, 'r')
+
+            ind = 0
+            flag = 0
+
+            while flag == 0:
+                line = f.readline()
+                match = re.search('^\d+ bonds', line)
+                if match:
+                    n_bonds = int(line.split()[0])
+
+                match = re.search('^Atoms', line)
+                if match:
+                    flag = 1
+
+                ind += 1
+
+            f.close()
+            print('* # of bonds = {}'.format(n_bonds))
+
+            subprocess.Popen('grep -A {} "Bonds" {} > temp.txt'.format(n_bonds + 1, path_to_file), shell=True).wait()
+            bonds = np.loadtxt('temp.txt', skiprows=2)
+            os.remove('temp.txt')
+            ## choose bridge bonds between blocks'
+            bonds = bonds[(bonds[:,1] == 3) | (bonds[:,1] == 6)].astype(int)
+            self.bonds = bonds
+
+        else:
+            bonds = None
+
+        bonds = self.comm.bcast(bonds, root=0)
+        self.bonds = bonds
+
+        avg_rows_per_process = int(len(self.fnames)/size)
+
+        start_row = rank * avg_rows_per_process
+        end_row = start_row + avg_rows_per_process
+        if rank == size - 1:
+            end_row = len(self.fnames)
+
+        angle_hist_tmp = np.empty([len(self.fnames), len(bins) - 1])
+        for iind in range(start_row, end_row):
+
+            try:
+
+                trj = np.loadtxt(self.fnames[iind], skiprows=9)
+
+                f = open(self.fnames[iind],'r')
+                for i in range(3):
+                    f.readline()
+                n_atoms = int(f.readline().split()[0])
+                f.close()
+
+                flag = 0
+                shift = 1
+                while (flag == 0):
+                    if trj.shape[0] != n_atoms:
+                        trj = np.loadtxt(self.fnames[iind - shift], skiprows=9)
+
+                        f = open(self.fnames[iind - shift],'r')
+                        for i in range(3):
+                            f.readline()
+                        n_atoms = int(f.readline().split()[0])
+                        f.close()
+
+                        shift +=1 
+                        
+                    else:
+                        flag = 1
+
+            except:
+                'empty dump files can be created due to storage limit'
+
+                flag = 0
+                shift = 1
+                while (flag == 0):
+
+                    try:
+                        trj = np.loadtxt(self.fnames[iind - shift], skiprows=9)
+
+                        f = open(self.fnames[iind - shift],'r')
+                        for i in range(3):
+                            f.readline()
+                        n_atoms = int(f.readline().split()[0])
+                        f.close()
+
+                        if trj.shape[0] == n_atoms:
+                            flag = 1
+                        else:
+                            shift += 1
+
+                    except:
+                        shift += 1
+
+            trj = trj[np.argsort(trj[:,0])]
+
+            cos_tmp = self.compute_cos(trj, iind)
+            del trj
+
+            cos_filtered = cos_tmp[np.logical_and(cos_tmp[:,0] > zlo, cos_tmp[:,0] < zhi)][:,1]
+
+            angles = np.degrees(np.arccos(cos_filtered))
+
+            hist, bin_edges = np.histogram(angles, bins)
+            bin_edges = bin_edges[:-1] + (bin_edges[1] - bin_edges[0])/2
+
+            angle_hist_tmp[iind, :] = hist
+
+        if rank == 0:
+            angle_hist = np.empty((len(self.fnames), len(bin_edges)))
+            angle_hist[start_row:end_row, :] = angle_hist_tmp[start_row:end_row]
+
+            for iind in range(1, size):
+                start_row = iind*avg_rows_per_process
+                end_row = start_row + avg_rows_per_process
+                if iind == size - 1:
+                    end_row = len(self.fnames)
+
+                recv = np.empty((len(self.fnames), len(bin_edges)))
+                req = self.comm.Irecv(recv, source=iind)
+                req.Wait()
+
+                angle_hist[start_row:end_row, :] = recv[start_row:end_row]
+        else:
+            send = angle_hist_tmp
+            req = self.comm.Isend(send, dest=0)
+            req.Wait()
+
+        if rank == 0:
+
+            align = Data.Data_TimeSeries(angle_hist, self.Nrepeat, std=True)
+            
+            angle_hist_final = align.mean
+            angle_hist_final = angle_hist_final.transpose()
+
+            result = {}
+            result.update({'z': bin_edges})
+            result.update({'hist_mean': align.mean})
+            result.update({'hist_std': align.std})
+
+            self.results.update({'chain_alignment': result})
 
     def compute_cos(self, trj, iind):
         '''
@@ -736,13 +906,14 @@ class dumpobj():
         d = self.d_pbc(A, B)
         z_avg = (trj[ind_A,5] + trj[ind_B,5])/2
 
-        cos = np.empty([len(self.bonds), 2])
-        #cos = np.empty([A.shape[0], 2]) #
+        cos = np.empty((len(self.bonds), 3))
+        #cos = np.empty((A.shape[0], 2)) #
 
         cos[:,0] = z_avg
         cos[:,1] = np.dot(d, self.director) / np.linalg.norm(d, axis=1)
+        cos[:,2] = self.bonds[:,1]
 
-        np.savetxt('cos_{}.txt'.format(os.path.basename(self.fnames[iind]).split('dump.')[-1]), cos)
+        #np.savetxt('cos_{}.txt'.format(os.path.basename(self.fnames[iind]).split('dump.')[-1]), cos)
 
         return cos
 
