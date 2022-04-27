@@ -20,9 +20,13 @@ try:
 except:
     print("no tex")
 
-class dumpobj():
+class Dumpobj():
 
     def __init__(self, path=None, dirname_pattern='equil_{}', dir_start=0, dir_end=0, fname_pattern='dump*.{}', Nevery=10000, Nrepeat=1, Nfreq=10000, end=10000, timestep=0.006, comm=None):
+
+        if path == None:
+            print('path was not given and set to current working directory.')
+            path = os.getcwd()
 
         if dir_start > dir_end:
             print('dir_start cannot be larger than dir_end. dir_start is set to 0.')
@@ -181,7 +185,7 @@ class dumpobj():
         self.fnames = fnames
         print("The number of files to be processed = {}".format(len(fnames)))
 
-    def run(self, protocols, comm=None):
+    def run(self, computes, comm=None):
         # TODO: run several functions on the trj at the same time
         fnames = []
 
@@ -281,7 +285,7 @@ class dumpobj():
 
         if rank == 0:
             
-            rho = Data.Data_TimeSeries(density_tmp, self.Nrepeat)
+            rho = Data.Data_TimeSerie2D(density_tmp, self.Nrepeat)
 
             density_final = rho.mean
             density_final = density_final.transpose()
@@ -649,7 +653,7 @@ class dumpobj():
 
         if rank == 0:
 
-            op = Data.Data_TimeSeries(S_1D, self.Nrepeat)
+            op = Data.Data_TimeSeries2D(S_1D, self.Nrepeat)
             
             S_final = op.mean
             S_final = S_final.transpose()
@@ -692,17 +696,32 @@ class dumpobj():
 
             return S_final
 
-    def alignment_chain(self, zhi, director, zlo=0):
+    def computeChainAlignment(self, director, zlo=0, zhi=None):
+
         self.director = np.asarray(director)
 
-        bins = np.linspace(0, 180, 72+1)
+        bins = np.linspace(0, 180, 72+1) # delta ranging from 0 to 180, delta_phi = 2.5
+        #bins = np.linspace(0, 360, 144+1) # dleta ranging from 0 to 360, delta_phi = 2.5
 
         size = self.comm.Get_size()
         rank = self.comm.Get_rank()
 
         if rank == 0:
+            if zhi == None:
+                h = self.h
+            else:
+                h = zhi
+        else:
+            h = None
+        
+        h = self.comm.bcast(h, root=0)
+
+        delta_h = 2 # thickness of bin
+        ll_max = int(h - delta_h) # lower limit max
+
+        if rank == 0:
             # number of bonds varies
-            path = 'equil_0'
+            path = os.path.join(self.path, 'equil_0')
             files = [f for f in os.listdir(path) if 'data' in f]
             path_to_file = os.path.join(path, files[0])
 
@@ -749,77 +768,29 @@ class dumpobj():
         if rank == size - 1:
             end_row = len(self.fnames)
 
-        angle_hist_tmp = np.empty([len(self.fnames), len(bins) - 1])
+        angle_hist_tmp = np.empty((len(self.fnames), ll_max + 1, len(bins) - 1))
         for iind in range(start_row, end_row):
 
-            try:
-
-                trj = np.loadtxt(self.fnames[iind], skiprows=9)
-
-                f = open(self.fnames[iind],'r')
-                for i in range(3):
-                    f.readline()
-                n_atoms = int(f.readline().split()[0])
-                f.close()
-
-                flag = 0
-                shift = 1
-                while (flag == 0):
-                    if trj.shape[0] != n_atoms:
-                        trj = np.loadtxt(self.fnames[iind - shift], skiprows=9)
-
-                        f = open(self.fnames[iind - shift],'r')
-                        for i in range(3):
-                            f.readline()
-                        n_atoms = int(f.readline().split()[0])
-                        f.close()
-
-                        shift +=1 
-                        
-                    else:
-                        flag = 1
-
-            except:
-                'empty dump files can be created due to storage limit'
-
-                flag = 0
-                shift = 1
-                while (flag == 0):
-
-                    try:
-                        trj = np.loadtxt(self.fnames[iind - shift], skiprows=9)
-
-                        f = open(self.fnames[iind - shift],'r')
-                        for i in range(3):
-                            f.readline()
-                        n_atoms = int(f.readline().split()[0])
-                        f.close()
-
-                        if trj.shape[0] == n_atoms:
-                            flag = 1
-                        else:
-                            shift += 1
-
-                    except:
-                        shift += 1
-
+            trj = np.loadtxt(self.fnames[iind], skiprows=9)
             trj = trj[np.argsort(trj[:,0])]
 
             cos_tmp = self.compute_cos(trj, iind)
-            del trj
 
-            cos_filtered = cos_tmp[np.logical_and(cos_tmp[:,0] > zlo, cos_tmp[:,0] < zhi)][:,1]
+            for ind, ll in enumerate(np.linspace(0, ll_max, ll_max + 1, dtype=int)):
+                ul = ll + delta_h
 
-            angles = np.degrees(np.arccos(cos_filtered))
+                cos_filtered = cos_tmp[np.logical_and(cos_tmp[:,0] > ll, cos_tmp[:,0] < ul)][:,1]
+                angles = np.degrees(np.arccos(cos_filtered))
 
-            hist, bin_edges = np.histogram(angles, bins)
+                hist, bin_edges = np.histogram(angles, bins)
+                angle_hist_tmp[iind, ind, :] = hist
             bin_edges = bin_edges[:-1] + (bin_edges[1] - bin_edges[0])/2
-
-            angle_hist_tmp[iind, :] = hist
+        
+        del trj
 
         if rank == 0:
-            angle_hist = np.empty((len(self.fnames), len(bin_edges)))
-            angle_hist[start_row:end_row, :] = angle_hist_tmp[start_row:end_row]
+            angle_hist = np.empty((len(self.fnames), ll_max + 1, len(bin_edges)))
+            angle_hist[start_row:end_row, :, :] = angle_hist_tmp[start_row:end_row, :, :]
 
             for iind in range(1, size):
                 start_row = iind*avg_rows_per_process
@@ -827,11 +798,11 @@ class dumpobj():
                 if iind == size - 1:
                     end_row = len(self.fnames)
 
-                recv = np.empty((len(self.fnames), len(bin_edges)))
+                recv = np.empty((len(self.fnames), ll_max + 1, len(bin_edges)))
                 req = self.comm.Irecv(recv, source=iind)
                 req.Wait()
 
-                angle_hist[start_row:end_row, :] = recv[start_row:end_row]
+                angle_hist[start_row:end_row, :, :] = recv[start_row:end_row, :, :]
         else:
             send = angle_hist_tmp
             req = self.comm.Isend(send, dest=0)
@@ -839,13 +810,13 @@ class dumpobj():
 
         if rank == 0:
 
-            align = Data.Data_TimeSeries(angle_hist, self.Nrepeat, std=True)
-            
-            angle_hist_final = align.mean
-            angle_hist_final = angle_hist_final.transpose()
-
             result = {}
-            result.update({'z': bin_edges})
+            result.update({'phi': bin_edges})
+
+            align = Data.Data_TimeSeries3D(angle_hist, self.Nrepeat)
+
+            print(align.mean[-1, 0, :])
+
             result.update({'hist_mean': align.mean})
             result.update({'hist_std': align.std})
 
@@ -906,12 +877,14 @@ class dumpobj():
         d = self.d_pbc(A, B)
         z_avg = (trj[ind_A,5] + trj[ind_B,5])/2
 
-        cos = np.empty((len(self.bonds), 3))
+        cos = np.empty((len(self.bonds), 4))
         #cos = np.empty((A.shape[0], 2)) #
 
         cos[:,0] = z_avg
         cos[:,1] = np.dot(d, self.director) / np.linalg.norm(d, axis=1)
         cos[:,2] = self.bonds[:,1]
+        cos[:,3] = np.zeros(len(cos))
+        cos[d[:,1] < 0, 3] = 1
 
         #np.savetxt('cos_{}.txt'.format(os.path.basename(self.fnames[iind]).split('dump.')[-1]), cos)
 
@@ -1932,6 +1905,119 @@ class dumpobj():
             
             np.save('save.npy', save, allow_pickle=True)
 
+    def reconstructFilm(self, blend, delta):
+
+        from scipy.ndimage import gaussian_filter
+
+        sys.setrecursionlimit(100000)
+
+        self.blend = blend
+        self.delta = delta
+        size = self.comm.Get_size()
+        rank = self.comm.Get_rank()
+
+        fnames = self.fnames.copy()
+        fnames.pop(0)
+
+        fnames = [fnames[self.Nrepeat*ind: self.Nrepeat*(ind + 1)] for ind in range(int(len(fnames)/self.Nrepeat))]
+        
+        avg_rows_per_process = int(len(fnames)/size)
+
+        start_row = rank * avg_rows_per_process
+        end_row = start_row + avg_rows_per_process
+        if rank == size - 1:
+            end_row = len(fnames)
+
+        if rank == 0:
+            h = self.h
+        else:
+            h = None
+
+        h = self.comm.bcast(h, root=0)
+
+        delta_h = 2
+        ll_max = int(h - delta_h)
+
+        res = np.empty((len(fnames), ll_max + 1, 3))
+        for row_ind in range(start_row, end_row):
+
+            for f_ind, fname in enumerate(fnames[row_ind]):
+                trj = np.loadtxt(fname, skiprows=9)
+
+                if f_ind == 0:
+                    binary_3D = self.binarize_3D(trj)
+                    binary_3D[binary_3D > 0] = 1
+                else:
+                    new_binary_3D = self.binarize_3D(trj)
+                    new_binary_3D[new_binary_3D > 0] = 1
+                    dim_z = min(binary_3D.shape[2], new_binary_3D.shape[2])
+                    binary_3D = binary_3D[:, :, :dim_z] + new_binary_3D[:, :, :dim_z]
+
+            del trj
+
+            for ind, ll in enumerate(np.linspace(0, ll_max, ll_max + 1, dtype=int)):
+                ul = ll + delta_h
+
+                binary_2D = binary_3D[:, :, ll*2: ul*2].sum(axis=2)
+
+                binary_2D[binary_2D > 0] = 1
+                binary_2D = gaussian_filter(binary_2D, 1)
+                binary_2D[binary_2D > 0.5] = 1
+                binary_2D[binary_2D < 0.5] = 0  
+
+                'film reconstruction snapshots'
+                plt.figure()
+                plt.imshow(binary_2D, origin='lower')
+                plt.savefig('test_{:02d}.png'.format(ind))
+                plt.close()
+
+                object_size = []
+                try:
+                    blobs = group2blob(binary_2D)
+
+                    h, w = binary_2D.shape
+    
+                    for blob_ind, blob in enumerate(blobs):
+                        #print (len(blob))
+                        if len(blob) < 10:
+                            for j in range(len(blob)):
+                                binary_2D[blob[j][0]%h, blob[j][1]%w]=0
+                        else:
+                            object_size.append(len(blob))
+                except:
+                    object_size.append(0)
+                
+                #print(np.mean(object_size), np.std(object_size))
+
+                res[row_ind, ind, :] = [(ll + ul)/2, np.mean(object_size), np.std(object_size)]
+
+        if rank == 0:
+
+            for iind in range(1, size):
+                start_row = iind*avg_rows_per_process
+                end_row = start_row + avg_rows_per_process
+                if iind == size - 1:
+                    end_row = len(self.fnames)
+
+                recv = np.empty((len(fnames), ll_max + 1 , 3))
+                req = self.comm.Irecv(recv, source=iind)
+                req.Wait()
+
+                res[start_row:end_row] = recv[start_row:end_row]
+        else:
+            send = res
+            req = self.comm.Isend(send, dest=0)
+            req.Wait()
+
+        if rank == 0:
+
+            for ind, val in enumerate(res): 
+                plt.figure()
+                plt.errorbar(val[:,0], val[:,1], yerr=val[:,2])
+                plt.ylim(0, 2500)
+                plt.savefig('test2_{:02d}.png'.format(ind))
+                plt.close()
+
     def sf(self, types, n, L=None):
 
         if L is None:
@@ -1977,3 +2063,51 @@ class dumpobj():
             time.sleep(2)
             subprocess.Popen('mpirun -np 32 ./a.out', shell=True).wait()
             os.rename('sq.txt', 'sq_{}.txt'.format(fname.split('.')[-1]))
+
+def group2blob(binary_2D):
+
+    h, w = binary_2D.shape
+
+    blobs = []
+    flag=0
+    while (flag == 0):
+        candidate=[]
+        blob=[]
+        for i in range(h):
+            for j in range(w):
+                if binary_2D[i,j] == 1:
+                    candidate.append([i,j])
+        if len(candidate) > 0:
+            floodfill_pbc(binary_2D, candidate[0][0], candidate[0][1], blob)
+            blobs.append(blob)
+        else:
+            flag=1
+
+    return blobs
+
+def floodfill_pbc(binary_2D, x, y, blob, repeat=4):
+    """
+    Floodfill over periodic boundary conditions
+    Arguments:
+    ----------
+    binary_2D: A 2D array (binx by biny) whose elements represent atoms counts or weighted intensities
+    x, y: indeces for binary_2D[x][y]
+    blob: sets of [i, j] for each object determined by floodfill
+    repeat: floodfill is applied over this many periods
+    Returns:
+    --------
+    """
+    array = binary_2D
+
+    if array[x%len(array), y%len(array[x%len(array)])] == 1:
+        array[x%len(array), y%len(array[x%len(array)])] = 0.5
+        blob.append([x,y])
+
+        if x > len(array)*(-repeat):
+            floodfill_pbc(array, x-1, y, blob)
+        if x < repeat*len(array)-1:
+            floodfill_pbc(array, x+1, y, blob)
+        if y > len(array[x%len(array)])*(-repeat):
+            floodfill_pbc(array, x, y-1, blob)
+        if y < repeat*len(array[x%len(array)])-1:
+            floodfill_pbc(array, x, y+1, blob)

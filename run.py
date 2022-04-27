@@ -1,4 +1,4 @@
-import compute
+import Compute
 
 try:
     from mpi4py import MPI
@@ -9,36 +9,52 @@ try:
 except:
     print('no mpi4py')
 
-#path = '/data3/N2022_f2550/C20n7250onL22n6591_0.00003Mtau'
+#path = '/data2/N2020_f2525_m5050/both_disordered/alpha_1/Gamma_0.4/s_1'
 path = None
-dumps = compute.dumpobj(path=path, dir_start=0, dir_end=0,
-        Nevery=10000, Nrepeat=1, Nfreq=10000, end=100000,
+dumps = Compute.Dumpobj(path=path, dir_start=25, dir_end=25,
+        Nevery=10000, Nrepeat=5, Nfreq=10000000, end=10000000,
         comm=comm)
 
-#dumps = compute.dumpobj(path=path, dir_start=0, dir_end=0,
+#import numpy as np
+#timesteps = [*np.linspace(0, 1000, 11),
+#        *np.linspace(2000, 10000, 9),
+#        *np.linspace(20000, 100000, 9),
+#        *np.linspace(200000, 1000000, 9)]
+#dumps.specify_timesteps(timesteps)
+
+#dumps = Compute.dumpobj(path=path, dir_start=0, dir_end=0,
 #        Nevery=10000, Nrepeat=1, Nfreq=10000, end=10000000,
 #        comm=comm)
 
-#a = compute.dumpobj(path=path, dirname_pattern='equil_{}', dir_end=0, fname_pattern='dump*.{}', Nevery=10000, Nrepeat=1, Nfreq=10000, end=10000000)
-#a = compute.dumpobj(dirname_pattern='equil_{}_quench_0', dir_end=0, fname_pattern='dump*.{}', Nevery=10000, Nrepeat=1, Nfreq=10000000, end=10000000)
+#a = Compute.dumpobj(path=path, dirname_pattern='equil_{}', dir_end=0, fname_pattern='dump*.{}', Nevery=10000, Nrepeat=1, Nfreq=10000, end=10000000)
+#a = Compute.dumpobj(dirname_pattern='equil_{}_quench_0', dir_end=0, fname_pattern='dump*.{}', Nevery=10000, Nrepeat=1, Nfreq=10000000, end=10000000)
 
-#a = compute.dumpobj(path=path, dirname_pattern='equil_{}', dir_end=0, fname_pattern='dump*.{}', Nevery=10000, Nrepeat=1, Nfreq=10000, end=100000)
+#a = Compute.dumpobj(path=path, dirname_pattern='equil_{}', dir_end=0, fname_pattern='dump*.{}', Nevery=10000, Nrepeat=1, Nfreq=10000, end=100000)
 #a.sf([1, 3], 31)
 
 #density = a.local_fC(57, 90, 0, 75, 101, comm)
 #density = a.density(57, 90, 0, 40, 61, comm)
-#density = a.density(57, 90, 0, 70, 141, comm)
+#density = dumps.density(0, 70, 141)
+#if rank == 0:
+#    import numpy as np
+#    np.savetxt('density.txt', density)
 #S = a.orientation(57, 90, 0, 50, 100, 0.5, [0, 0, 1], comm)
 #S = a.orientation(57, 90, 0, 70, 100, 2.0, [0, 0, 1], comm)
 #S = dumps.orientation(0, 70, 140, 0.5, [0, 0, 1])
 #if rank == 0:
 #    import numpy as np
 #    np.savetxt('S.txt', S)
-#dumps.segregation(1, 0, 70, 14, 22, 141, 0.5)
-#concentration = a.concentration(57, 90, 70, 'L', comm)
+#seg = dumps.segregation(1, 0, 70, 14, 22, 141, 0.5)
+#if rank == 0:
+#    import numpy as np
+#    np.savetxt('seg.txt', seg)
+#concentration = dumps.concentration(57, 90, 70, 'L')
 #concentration = a.concentration(57, 90, 48, 'L', comm)
 
-dumps.sf([3, 4], 51)
+#dumps.reconstructFilm(1, [0.5, 0.5, 0.5])
+dumps.computeChainAlignment([0, 0, 1])
+
+#dumps.sf([2, 4], 51)
 
 #if rank == 0:
 #    print(density.shape)
@@ -58,3 +74,5 @@ run_args = {
         }
 
 #a.chisq(1, [0.5, 0.5, 0.5], run_args, comm)
+
+dumps.save_results()

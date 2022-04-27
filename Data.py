@@ -60,29 +60,89 @@ class Data2D:
         
         plt.close(self.fig.number)
 
-class Data_TimeSeries:
-
-    def __init__(self, data, Nrepeat, std=False):
-
+class Data_TimeSeries1D:
+    def __init__(self, data, Nrepeat, std_true=True):
+        
         ndim = data.ndim
-
-        if ndim == 1:
-            data = data.reshape(len(data), -1)
-            binsize = 1
-        if ndim == 2:
-            binsize = data.shape[1]
-
-        initial = data[0]
-        rest = data[1:].reshape(-1, Nrepeat, binsize)
-
-        mean = rest.mean(axis=1)
-        self.mean = np.vstack((initial, mean))
-
-        if std:
-            std = rest.std(axis=1)
-            self.std = np.vstack((np.zeros(binsize), std))
         
         if ndim == 1:
-            self.mean = self.mean.reshape(-1)
-            if std: self.std = self.std.reshape(-1)
+            self.Nrepeat = Nrepeat
+            self.std_true = std_true
+            self.run(data)
+        else:
+            print("Given array is not 1D")
 
+    def run(self, data):
+        data = data.reshape(len(data), -1)
+        binsize = 1
+
+        self.initial = data[0]
+        self.rest = data[1:].reshape(-1, self.Nrepeat, binsize)
+        
+        self.mean = self.rest.mean(axis=1)
+        self.mean = np.vstack((self.initial, self.mean))
+        self.mean = self.mean.reshape(-1)
+        
+        if self.std_true:
+            self.std = self.rest.std(axis=1)        
+            self.std = np.vstack((np.zeros(binsize), self.std))
+            self.std = self.std.reshape(-1)
+            
+class Data_TimeSeries2D:
+    def __init__(self, data, Nrepeat, t_axis=0, std_true=True):
+        
+        ndim = data.ndim
+        
+        if ndim == 2:
+            self.Nrepeat = Nrepeat
+            self.t_axis = t_axis
+            self.std_true = std_true
+            self.run(data)
+        else:
+            print("Given array is not 2D")
+        
+    def run(self, data):
+        binsize = data.shape[1]
+        axis = 1
+        if self.t_axis == 1:
+            binsize = data.shape[0]
+            axis = 0
+
+        self.initial = data[0]
+        self.rest = data[1:].reshape(-1, self.Nrepeat, binsize)
+        
+        self.mean = self.rest.mean(axis=axis)
+        self.mean = np.vstack((self.initial, self.mean))
+        
+        if self.std_true:
+            self.std = self.rest.std(axis=axis)        
+            self.std = np.vstack((np.zeros(binsize), self.std))
+        
+class Data_TimeSeries3D:
+    def __init__(self, data, Nrepeat, t_axis=0, axis=1, bin_axis=2, std_true=True):
+        
+        ndim = data.ndim
+        
+        if ndim == 3:
+            self.Nrepeat = Nrepeat
+            self.t_axis = t_axis
+            self.axis = axis
+            self.bin_axis = bin_axis
+            self.std_true = std_true
+            self.run(data)
+        else:
+            print("Given array is not 3D")
+
+    def run(self, data):
+        size = data.shape[self.axis]
+        binsize = data.shape[self.bin_axis]
+        
+        self.initial = data[0]
+        self.rest = data[1:].reshape(-1, self.Nrepeat, size, binsize)
+        
+        self.mean = self.rest.mean(axis=self.axis)
+        self.mean = np.vstack((self.initial[None, :, :], self.mean))
+        
+        if self.std_true:
+            self.std = self.rest.std(axis=self.axis)
+            self.std = np.vstack((np.zeros((size, binsize))[None, :, :], self.std))
