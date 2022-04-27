@@ -189,7 +189,7 @@ class Dumpobj():
         # TODO: run several functions on the trj at the same time
         fnames = []
 
-    def density(self, zlo, zhi, n_bins):
+    def computeDensity(self, zlo, zhi, n_bins):
         self.zlo = zlo
         self.zhi = zhi
         self.n_bins = n_bins
@@ -217,8 +217,6 @@ class Dumpobj():
                     f.readline()
                 n_atoms = int(f.readline().split()[0])
                 f.close()
-
-                #print(n_atoms)
 
                 flag = 0
                 shift = 1
@@ -261,7 +259,7 @@ class Dumpobj():
                     except:
                         shift += 1
 
-            density_tmp[iind, :] = self.compute_density(trj)
+            density_tmp[iind, :] = self._computeDensity(trj)
 
             del trj
 
@@ -339,7 +337,7 @@ class Dumpobj():
 
             return density_final
 
-    def compute_density(self, trj, **args):
+    def _computeDensity(self, trj, **args):
         #trj_all = trj[trj[:,2] <= 4]
         trj_phase1 = trj[(trj[:,2] == 1) | (trj[:,2] == 3)]
         #trj_phase2 = trj[(trj[:,2] == 2) | (trj[:,2] == 4)]
@@ -357,7 +355,7 @@ class Dumpobj():
         
         return density
 
-    def local_fC(self, lx, ly, zlo, zhi, n_bins):
+    def computeLocalfC(self, lx, ly, zlo, zhi, n_bins):
         self.lx = lx
         self.ly = ly
         self.zlo = zlo
@@ -431,7 +429,7 @@ class Dumpobj():
                     except:
                         shift += 1
 
-            density_tmp[iind, :] = self.compute_fC(trj)
+            density_tmp[iind, :] = self._computeLocalfC(trj)
 
             del trj
 
@@ -489,7 +487,7 @@ class Dumpobj():
 
             return density_final
 
-    def compute_fC(self, trj, **args):
+    def _computeLocalfC(self, trj, **args):
         #trj_all = trj[trj[:,2] <= 4]
         trj_phase1 = trj[trj[:,2] == 1]
         trj_phase2 = trj[trj[:,2] == 3]
@@ -507,7 +505,7 @@ class Dumpobj():
         
         return fC
 
-    def orientation(self, zlo, zhi, n_bins, w, director):
+    def computeOrientation(self, zlo, zhi, n_bins, w, director):
         self.zlo = zlo
         self.zhi = zhi
         self.n_bins = n_bins
@@ -923,7 +921,7 @@ class Dumpobj():
 
         return vector
 
-    def orientation_plane(self, zlo, zhi, n_bins, w, director):
+    def computeOrientationInPlane(self, zlo, zhi, n_bins, w, director):
         self.zlo = zlo
         self.zhi = zhi
         self.n_bins = n_bins
@@ -1058,7 +1056,7 @@ class Dumpobj():
  
         return S
 
-    def segregation(self, blend, zlo, zhi, nx, ny, nz, w):
+    def computeSegregation(self, blend, zlo, zhi, nx, ny, nz, w):
         self.blend = blend
         self.zlo = zlo
         self.zhi = zhi
@@ -1088,7 +1086,7 @@ class Dumpobj():
             binary_3D['A'] = tmp['A']
             binary_3D['B'] = tmp['B']
 
-            tmp = self.compute_segregation(binary_3D)
+            tmp = self._computesegregation(binary_3D)
             seg_tmp[iind, :] = tmp
 
         if rank == 0:
@@ -1154,7 +1152,7 @@ class Dumpobj():
 
             return seg_final
 
-    def compute_segregation(self, binary_3D):
+    def _computeSegregation(self, binary_3D):
 
         seg = binary_3D['A'] / (binary_3D['A'] + binary_3D['B'])
         seg[binary_3D['A'] + binary_3D['B'] == 0] = np.nan
@@ -1250,7 +1248,7 @@ class Dumpobj():
 
         return binary, delta
 
-    def chisq(self, blend, delta, run_args, **kwargs):
+    def computeChisq(self, blend, delta, run_args, **kwargs):
 
         self.blend = blend
         self.delta = delta
@@ -1428,7 +1426,7 @@ class Dumpobj():
         chisq = np.empty(len(topview_final))
 
         for iind in range(start_row, end_row):
-            chisq[iind] = self.compute_chisq(topview_final[iind].reshape(self.dims['h'], self.dims['w']), iind, **run_args)
+            chisq[iind] = self._computeChisq(topview_final[iind].reshape(self.dims['h'], self.dims['w']), iind, **run_args)
 
         if rank == 0:
 
@@ -1520,7 +1518,7 @@ class Dumpobj():
 
         return topview
 
-    def compute_chisq(self, topview, num, **kwargs):
+    def _computeChisq(self, topview, num, **kwargs):
 
         fig=plt.figure(figsize=(4,3))
         ax=fig.add_subplot(111)
@@ -1905,8 +1903,11 @@ class Dumpobj():
             
             np.save('save.npy', save, allow_pickle=True)
 
-    def reconstructFilm(self, blend, delta):
-
+    def computeObjsize(self, blend, delta):
+        '''
+        Carry out film resconstruction by looking at every height.
+        With the matrix flood-filled, calculate the size of each morphological object.
+        '''
         from scipy.ndimage import gaussian_filter
 
         sys.setrecursionlimit(100000)
@@ -2018,7 +2019,7 @@ class Dumpobj():
                 plt.savefig('test2_{:02d}.png'.format(ind))
                 plt.close()
 
-    def sf(self, types, n, L=None):
+    def computeStructurefactor(self, types, n, L=None):
 
         if L is None:
             L = max(self.lx, self.ly)
