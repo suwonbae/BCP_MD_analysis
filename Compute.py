@@ -189,6 +189,61 @@ class Dumpobj():
         # TODO: run several functions on the trj at the same time
         fnames = []
 
+    def fix_blankdump(self, f_ind):
+
+        try:
+
+            trj = np.loadtxt(self.fnames[f_ind], skiprows=9)
+
+            f = open(self.fnames[f_ind],'r')
+            for i in range(3):
+                f.readline()
+            n_atoms = int(f.readline().split()[0])
+            f.close()
+
+            flag = 0
+            shift = 1
+            while (flag == 0):
+                if trj.shape[0] != n_atoms:
+                    trj = np.loadtxt(self.fnames[f_ind - shift], skiprows=9)
+
+                    f = open(self.fnames[f_ind - shift],'r')
+                    for i in range(3):
+                        f.readline()
+                    n_atoms = int(f.readline().split()[0])
+                    f.close()
+
+                    shift +=1 
+                        
+                else:
+                    flag = 1
+
+        except:
+            'empty dump files can be created due to storage limit'
+
+            flag = 0
+            shift = 1
+            while (flag == 0):
+
+                try:
+                    trj = np.loadtxt(self.fnames[f_ind - shift], skiprows=9)
+
+                    f = open(self.fnames[f_ind - shift],'r')
+                    for i in range(3):
+                        f.readline()
+                    n_atoms = int(f.readline().split()[0])
+                    f.close()
+
+                    if trj.shape[0] == n_atoms:
+                        flag = 1
+                    else:
+                        shift += 1
+
+                except:
+                    shift += 1
+
+        return trj
+
     def computeDensity(self, zlo, zhi, n_bins):
         self.zlo = zlo
         self.zhi = zhi
@@ -208,60 +263,11 @@ class Dumpobj():
         density_tmp = np.empty([len(self.fnames), self.n_bins - 1])
         for iind in range(start_row, end_row):
 
-            try:
-
-                trj = np.loadtxt(self.fnames[iind], skiprows=9)
-
-                f = open(self.fnames[iind],'r')
-                for i in range(3):
-                    f.readline()
-                n_atoms = int(f.readline().split()[0])
-                f.close()
-
-                flag = 0
-                shift = 1
-                while (flag == 0):
-                    if trj.shape[0] != n_atoms:
-                        trj = np.loadtxt(self.fnames[iind - shift], skiprows=9)
-
-                        f = open(self.fnames[iind - shift],'r')
-                        for i in range(3):
-                            f.readline()
-                        n_atoms = int(f.readline().split()[0])
-                        f.close()
-
-                        shift +=1 
-                        
-                    else:
-                        flag = 1
-
-            except:
-                'empty dump files can be created due to storage limit'
-
-                flag = 0
-                shift = 1
-                while (flag == 0):
-
-                    try:
-                        trj = np.loadtxt(self.fnames[iind - shift], skiprows=9)
-
-                        f = open(self.fnames[iind - shift],'r')
-                        for i in range(3):
-                            f.readline()
-                        n_atoms = int(f.readline().split()[0])
-                        f.close()
-
-                        if trj.shape[0] == n_atoms:
-                            flag = 1
-                        else:
-                            shift += 1
-
-                    except:
-                        shift += 1
+            trj = self.fix_blankdump(iind)
 
             density_tmp[iind, :] = self._computeDensity(trj)
 
-            del trj
+        del trj
 
         if rank == 0:
 
@@ -306,36 +312,7 @@ class Dumpobj():
 
             res.plot(save='density_evol.png', show=False, plot_args=plot_args)
 
-            '''
-            cmaps = {}
-            from matplotlib.colors import ListedColormap
-            #W2B = np.dstack((np.linspace(1,0,256), np.linspace(1,0,256), np.linspace(1,0,256)))
-            W2B = np.dstack((np.linspace(1,0,8), np.linspace(1,0,8), np.linspace(1,0,8)))
-            cmaps['W2B'] = ListedColormap(W2B[0], name='W2B')
-
-            fig, ax = plt.subplots(figsize=(4, 3))
-            #plt.rc('font',size=9)
-
-            im = ax.imshow(density_final, vmin=0, vmax=0.8, cmap=cmaps['W2B'], origin='lower')
-            ax.set_aspect('auto')
-            divider = make_axes_locatable(ax)
-            cax = divider.append_axes("right", size="5%", pad=0.05)
-            cbar = fig.colorbar(im, cax=cax)
-            cbar.set_ticks([0, 0.8])
-            cbar.set_label(r'density ($m/\sigma^{3}$)')
-            xticks = np.linspace(0,len(self.source_dirs)*len(self.freqs),4)
-            ax.set_xticks(xticks)
-            ax.set_xticklabels([format(i*self.Nfreq*0.006*pow(10,-6), '.4f') for i in xticks])
-            ax.set_xlabel(r'time ($\times 10^{6} \tau$)')
-            ax.set_yticks(np.linspace(0, self.n_bins-1,5))
-            ax.set_ylim(0 - 0.5, self.n_bins-1 + 0.5)
-            ax.set_yticklabels(np.linspace(self.bins[0], self.bins[-1], 5))
-            ax.set_ylabel(r'$z$ ($\sigma$)')
-            plt.tight_layout(pad=1,h_pad=None,w_pad=None,rect=None)
-            plt.savefig("density_evol.png", dpi=1000)
-            '''
-
-            return density_final
+            self.results.update({'density': density_final})
 
     def _computeDensity(self, trj, **args):
         #trj_all = trj[trj[:,2] <= 4]
@@ -373,65 +350,14 @@ class Dumpobj():
         if rank == size - 1:
             end_row = len(self.fnames)
 
-        density_tmp = np.empty([len(self.fnames), self.n_bins - 1])
+        fC_tmp = np.empty([len(self.fnames), self.n_bins - 1])
         for iind in range(start_row, end_row):
 
-            try:
+            trj = self.fix_blankdump(iind)
 
-                trj = np.loadtxt(self.fnames[iind], skiprows=9)
+            fC_tmp[iind, :] = self._computeLocalfC(trj)
 
-                f = open(self.fnames[iind],'r')
-                for i in range(3):
-                    f.readline()
-                n_atoms = int(f.readline().split()[0])
-                f.close()
-
-                #print(n_atoms)
-
-                flag = 0
-                shift = 1
-                while (flag == 0):
-                    if trj.shape[0] != n_atoms:
-                        trj = np.loadtxt(self.fnames[iind - shift], skiprows=9)
-
-                        f = open(self.fnames[iind - shift],'r')
-                        for i in range(3):
-                            f.readline()
-                        n_atoms = int(f.readline().split()[0])
-                        f.close()
-
-                        shift +=1 
-                        
-                    else:
-                        flag = 1
-
-            except:
-                'empty dump files can be created due to storage limit'
-
-                flag = 0
-                shift = 1
-                while (flag == 0):
-
-                    try:
-                        trj = np.loadtxt(self.fnames[iind - shift], skiprows=9)
-
-                        f = open(self.fnames[iind - shift],'r')
-                        for i in range(3):
-                            f.readline()
-                        n_atoms = int(f.readline().split()[0])
-                        f.close()
-
-                        if trj.shape[0] == n_atoms:
-                            flag = 1
-                        else:
-                            shift += 1
-
-                    except:
-                        shift += 1
-
-            density_tmp[iind, :] = self._computeLocalfC(trj)
-
-            del trj
+        del trj
 
         if rank == 0:
 
@@ -445,29 +371,44 @@ class Dumpobj():
                 req = self.comm.Irecv(recv, source=iind)
                 req.Wait()
 
-                density_tmp[start_row:end_row] = recv[start_row:end_row]
+                fC_tmp[start_row:end_row] = recv[start_row:end_row]
         else:
-            send = density_tmp
+            send = fC_tmp
             req = self.comm.Isend(send, dest=0)
             req.Wait()
 
         if rank == 0:
-            density_initial = density_tmp[0]
-            density_all = density_tmp[1:].reshape(len(self.source_dirs), len(self.freqs), self.Nrepeat, n_bins - 1)
-            density_avg = np.empty([len(self.source_dirs), len(self.freqs), n_bins - 1])
 
-            for dir_ind, source_dir in enumerate(self.source_dirs):
-                for freq_ind, freq in enumerate(self.freqs):
-                    density_avg[dir_ind, freq_ind, :] = density_all[dir_ind, freq_ind, :, :].mean(axis=0)
+            fC = Data.Data_TimeSerie2D(fC_tmp, self.Nrepeat)
 
-            density_avg = density_avg.reshape(-1, self.n_bins - 1)
-            density_final = np.vstack((density_initial, density_avg))
-            density_final = density_final.transpose()
+            fC_final = fC.mean
+            fC_final = fC_final.transpose()
 
+            res = Data.Data2D(z=fC_final)
+            xticks = np.linspace(0,len(self.source_dirs)*len(self.freqs),4) 
+            plot_args = {
+                'zmin': 0,
+                'zmax': 1.0,
+                'cmap': colormaps.cmaps['G2B'],
+                'cbarticks': [0, 1.0],
+                'cbarlabel': r'$f_{\mathrm{C}}$',
+                'xticks': xticks,
+                'xticklabels': [format(i*self.Nfreq*0.006*pow(10,-6), '.4f') for i in xticks],
+                'xlabel': r'time ($\times 10^{6} \tau$)',
+                'yticks': np.linspace(0, self.n_bins-1, 5),
+                'yticklabels': np.linspace(self.bins[0], self.bins[-1], 5),
+                'ylabel': r'$z$ ($\sigma$)',
+            }
+
+            res.plot(save='fC_evol.png', show=False, plot_args=plot_args)
+
+            self.results.update({'fC': fC_final})
+
+            '''
             fig, ax = plt.subplots(figsize=(4, 3))
             #plt.rc('font',size=9)
 
-            im = ax.imshow(density_final, vmin=0, vmax=1.0, cmap=cmaps['G2B'], origin='lower')
+            im = ax.imshow(fC_final, vmin=0, vmax=1.0, cmap=colormaps.cmaps['G2B'], origin='lower')
             ax.set_aspect('auto')
             divider = make_axes_locatable(ax)
             cax = divider.append_axes("right", size="5%", pad=0.05)
@@ -484,8 +425,7 @@ class Dumpobj():
             ax.set_ylabel(r'$z$ ($\sigma$)')
             plt.tight_layout(pad=1,h_pad=None,w_pad=None,rect=None)
             plt.savefig("fC_evol.png", dpi=1000)
-
-            return density_final
+            '''
 
     def _computeLocalfC(self, trj, **args):
         #trj_all = trj[trj[:,2] <= 4]
