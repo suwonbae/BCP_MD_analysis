@@ -289,11 +289,16 @@ class Dumpobj():
 
         if rank == 0:
             
+            result = {}
+
             rho = Data.Data_TimeSerie2D(density_tmp, self.Nrepeat)
 
             density_final = rho.mean
             density_final = density_final.transpose()
-                        
+            
+            result.update({'mean': rho.mean})
+            result.update({'std': rho.std})
+
             res = Data.Data2D(z=density_final)
             xticks = np.linspace(0,len(self.source_dirs)*len(self.freqs),4) 
             plot_args = {
@@ -312,7 +317,7 @@ class Dumpobj():
 
             res.plot(save='density_evol.png', show=False, plot_args=plot_args)
 
-            self.results.update({'density': density_final})
+            self.results.update({'density': result})
 
     def _computeDensity(self, trj, **args):
         #trj_all = trj[trj[:,2] <= 4]
@@ -379,10 +384,15 @@ class Dumpobj():
 
         if rank == 0:
 
+            result = {}
+
             fC = Data.Data_TimeSerie2D(fC_tmp, self.Nrepeat)
 
             fC_final = fC.mean
             fC_final = fC_final.transpose()
+
+            result.update({'mean': fC.mean})
+            result.update({'std': fC.std})
 
             res = Data.Data2D(z=fC_final)
             xticks = np.linspace(0,len(self.source_dirs)*len(self.freqs),4) 
@@ -402,7 +412,7 @@ class Dumpobj():
 
             res.plot(save='fC_evol.png', show=False, plot_args=plot_args)
 
-            self.results.update({'fC': fC_final})
+            self.results.update({'fC': result})
 
             '''
             fig, ax = plt.subplots(figsize=(4, 3))
@@ -458,7 +468,7 @@ class Dumpobj():
 
         if rank == 0:
             # number of bonds varies
-            path = 'equil_0'
+            path = os.path.join(self.path, 'equil_0')
             files = [f for f in os.listdir(path) if 'data' in f]
             path_to_file = os.path.join(path, files[0])
 
@@ -510,64 +520,17 @@ class Dumpobj():
         S_tmp = np.empty([len(self.fnames), self.n_bins])
         for iind in range(start_row, end_row):
 
-            try:
-
-                trj = np.loadtxt(self.fnames[iind], skiprows=9)
-
-                f = open(self.fnames[iind],'r')
-                for i in range(3):
-                    f.readline()
-                n_atoms = int(f.readline().split()[0])
-                f.close()
-
-                flag = 0
-                shift = 1
-                while (flag == 0):
-                    if trj.shape[0] != n_atoms:
-                        trj = np.loadtxt(self.fnames[iind - shift], skiprows=9)
-
-                        f = open(self.fnames[iind - shift],'r')
-                        for i in range(3):
-                            f.readline()
-                        n_atoms = int(f.readline().split()[0])
-                        f.close()
-
-                        shift +=1 
-                        
-                    else:
-                        flag = 1
-
-            except:
-                'empty dump files can be created due to storage limit'
-
-                flag = 0
-                shift = 1
-                while (flag == 0):
-
-                    try:
-                        trj = np.loadtxt(self.fnames[iind - shift], skiprows=9)
-
-                        f = open(self.fnames[iind - shift],'r')
-                        for i in range(3):
-                            f.readline()
-                        n_atoms = int(f.readline().split()[0])
-                        f.close()
-
-                        if trj.shape[0] == n_atoms:
-                            flag = 1
-                        else:
-                            shift += 1
-
-                    except:
-                        shift += 1
+            trj = self.fix_blankdump(iind)
 
             trj = trj[np.argsort(trj[:,0])]
 
             cos_tmp = self.compute_cos(trj, iind)
-            del trj
-
             tmp = self.compute_S(cos_tmp)
             S_tmp[iind, :] = tmp
+
+        del trj
+        del cos_tmp
+        del tmp
 
         if rank == 0:
             S_1D = np.empty([len(self.fnames), self.n_bins])
@@ -591,29 +554,21 @@ class Dumpobj():
 
         if rank == 0:
 
+            result = {}
             op = Data.Data_TimeSeries2D(S_1D, self.Nrepeat)
             
             S_final = op.mean
             S_final = S_final.transpose()
             
             print(np.max(S_final), np.min(S_final))
-            
-            cmaps = {}
-            from matplotlib.colors import ListedColormap
-            #R = np.concatenate((np.linspace(0,1,85), np.ones(171)))
-            #G = np.concatenate((np.linspace(0,1,85), np.linspace(1,0,171)))
-            #B = np.concatenate((np.ones(85), np.linspace(1,0,171)))
-            R = np.concatenate((np.linspace(0,1,5), np.ones(10)))
-            G = np.concatenate((np.linspace(0,1,5), np.linspace(1,0,10)))
-            B = np.concatenate((np.ones(5), np.linspace(1,0,10)))
 
-            BWR = np.dstack((R, G, B))
-            cmaps['BWR'] = ListedColormap(BWR[0], name='BWR')
+            result.update({'mean': op.mean})
+            result.update({'std': op.std})
 
             xticks = np.linspace(0,len(self.source_dirs)*len(self.freqs),4)
 
             fig, ax = plt.subplots(figsize=(4,3))
-            im = ax.imshow(S_final, vmin=-0.5, vmax=1.0, cmap=cmaps['BWR'], origin='lower')
+            im = ax.imshow(S_final, vmin=-0.5, vmax=1.0, cmap=colormaps.cmaps['BWR'], origin='lower')
             ax.plot([xticks[0], xticks[-1]], [self.h, self.h], 'k--', lw=0.5)
             ax.set_aspect('auto')
             divider = make_axes_locatable(ax)
@@ -632,7 +587,7 @@ class Dumpobj():
             plt.tight_layout(pad=1,h_pad=None,w_pad=None,rect=None)
             plt.savefig('angle_map.png', dpi=1000) 
 
-            return S_final
+            self.results.update({'angle_map': result})
 
     def computeChainAlignment(self, director, zlo=0, zhi=None):
 
@@ -1241,70 +1196,18 @@ class Dumpobj():
         if rank == size - 1:
             end_row = len(self.fnames)
 
-        #topview = np.empty([len(fnames), self.dims['h'], self.dims['w']])
         topview = np.empty([len(self.fnames), self.dims['h'] * self.dims['w']])
 
         for iind in range(start_row, end_row):
 
-            try:
-
-                trj = np.loadtxt(self.fnames[iind], skiprows=9)
-
-                f = open(self.fnames[iind],'r')
-                for i in range(3):
-                    f.readline()
-                n_atoms = int(f.readline().split()[0])
-                f.close()
-
-                #print(n_atoms)
-
-                flag = 0
-                shift = 1
-                while (flag == 0):
-                    if trj.shape[0] != n_atoms:
-                        trj = np.loadtxt(self.fnames[iind - shift], skiprows=9)
-
-                        f = open(self.fnames[iind - shift],'r')
-                        for i in range(3):
-                            f.readline()
-                        n_atoms = int(f.readline().split()[0])
-                        f.close()
-
-                        shift +=1 
-                        
-                    else:
-                        flag = 1
-
-            except:
-                'empty dump files can be created due to storage limit'
-
-                flag = 0
-                shift = 1
-                while (flag == 0):
-
-                    try:
-                        trj = np.loadtxt(self.fnames[iind - shift], skiprows=9)
-
-                        f = open(self.fnames[iind - shift],'r')
-                        for i in range(3):
-                            f.readline()
-                        n_atoms = int(f.readline().split()[0])
-                        f.close()
-
-                        if trj.shape[0] == n_atoms:
-                            flag = 1
-                        else:
-                            shift += 1
-
-                    except:
-                        shift += 1
+            trj = self.fix_blankdump(iind)
 
             trj = trj[np.argsort(trj[:,0])]
             trj[:,5] = trj[:,5] - self.box[2][0]
 
-            topview[iind] = self.view_xy(self.binarize_3D(trj)).reshape(-1) #with custom bin
+            topview[iind] = view_xy(self.binarize_3D(trj)).reshape(-1) #with custom bin
 
-            del trj
+        del trj
 
         if rank == 0:
 
@@ -1314,7 +1217,6 @@ class Dumpobj():
                 if iind == size - 1:
                     end_row = len(self.fnames)
 
-                #recv = np.empty([len(fnames), self.dims['h'], self.dims['w']])
                 recv = np.empty([len(self.fnames), self.dims['h'] * self.dims['w']])
                 req = self.comm.Irecv(recv, source=iind)
                 req.Wait()
@@ -1324,7 +1226,6 @@ class Dumpobj():
                 del recv
 
         else:
-            #send = np.empty([len(fnames), self.dims['h'], self.dims['w']])
             send = np.empty([len(self.fnames), self.dims['h'] * self.dims['w']])
             for iind in range(start_row, end_row):
                 send[iind] = topview[iind]
@@ -1390,7 +1291,7 @@ class Dumpobj():
             for iind, val in enumerate(chisq):
                 print(iind, val)
 
-            np.savetxt('chisq.txt', chisq)
+            self.results.update({'chisq': chisq})
 
             '''
             fig, ax = plt.subplots(figsize=(4,3))
@@ -1446,25 +1347,13 @@ class Dumpobj():
 
         return binary
 
-    def view_xy(self, binary_3D):
-
-        array = binary_3D
-
-        'sum up over thickness'
-        topview = np.sum(binary_3D, axis=2)
-
-        'averagve over thickness'
-        #topview = np.average(binary_3D, axis=2)
-
-        return topview
-
     def _computeChisq(self, topview, num, **kwargs):
 
         fig=plt.figure(figsize=(4,3))
         ax=fig.add_subplot(111)
         ax.imshow(topview, cmap=plt.get_cmap('gray'), origin='lower')
         plt.tight_layout(pad=1, h_pad=None, w_pad=None, rect=None)
-        plt.savefig('{}_topview.png'.format(num), dpi=1000)
+        plt.savefig('{}_topview.png'.format(num), dpi=200)
         plt.close()
 
         self.scale = kwargs['distance_in_pixels'] / kwargs['known_distance']
@@ -1585,7 +1474,7 @@ class Dumpobj():
             self.l0 = 15.0
             self.l0_std = 0.0
 
-    def position(self):
+    def computePosition(self):
 
         #moi
         #molnumber, N, fA
@@ -1649,7 +1538,7 @@ class Dumpobj():
             plt.tight_layout(pad=1,h_pad=None,w_pad=None,rect=None)
             plt.savefig("position.png", dpi=1000)
 
-    def concentration(self, lx, ly, z_max, phase):
+    def computeConcentration(self, lx, ly, z_max, phase):
 
         size = self.comm.Get_size()
         rank = self.comm.Get_rank()
@@ -1665,58 +1554,7 @@ class Dumpobj():
         concentration_tmp = np.empty((len(self.fnames), z_max))
         for iind in range(start_row, end_row):
 
-            try:
-
-                trj = np.loadtxt(self.fnames[iind], skiprows=9)
-
-                f = open(self.fnames[iind],'r')
-                for i in range(3):
-                    f.readline()
-                n_atoms = int(f.readline().split()[0])
-                f.close()
-
-                #print(n_atoms)
-
-                flag = 0
-                shift = 1
-                while (flag == 0):
-                    if trj.shape[0] != n_atoms:
-                        trj = np.loadtxt(self.fnames[iind - shift], skiprows=9)
-
-                        f = open(self.fnames[iind - shift],'r')
-                        for i in range(3):
-                            f.readline()
-                        n_atoms = int(f.readline().split()[0])
-                        f.close()
-
-                        shift +=1 
-                        
-                    else:
-                        flag = 1
-
-            except:
-                'empty dump files can be created due to storage limit'
-
-                flag = 0
-                shift = 1
-                while (flag == 0):
-
-                    try:
-                        trj = np.loadtxt(self.fnames[iind - shift], skiprows=9)
-
-                        f = open(self.fnames[iind - shift],'r')
-                        for i in range(3):
-                            f.readline()
-                        n_atoms = int(f.readline().split()[0])
-                        f.close()
-
-                        if trj.shape[0] == n_atoms:
-                            flag = 1
-                        else:
-                            shift += 1
-
-                    except:
-                        shift += 1
+            trj = self.fix_blankdump(iind)
 
             if phase == 'C':
                 logic = trj[:,2] < 3
@@ -1724,7 +1562,7 @@ class Dumpobj():
                 logic = np.logical_and(trj[:,2] > 2, trj[:,2] < 5)
             concentration_tmp[iind] = stats.binned_statistic_dd(trj[logic,5], None, statistic='count', bins=[binz]).statistic
 
-            del trj
+        del trj
 
         if rank == 0:
 
@@ -1959,10 +1797,14 @@ class Dumpobj():
                 plt.savefig('test2_{:02d}.png'.format(ind))
                 plt.close()
 
-    def computeStructurefactor(self, types, n, L=None):
+    def computeStructurefactor(self, types, n, Lx=None, Ly=None, Lz=None):
 
-        if L is None:
-            L = max(self.lx, self.ly)
+        if Lx is None:
+            Lx = self.lx
+        if Ly is None:
+            Ly = self.ly
+        if Lz is None:
+            Lz = self.box[2][1] - self.box[2][0]
 
         trj = np.loadtxt(self.fnames[0], skiprows=9)
         trj = trj[np.argsort(trj[:,0])]
@@ -1974,11 +1816,9 @@ class Dumpobj():
                 logic = np.logical_or(logic, trj[:,2]==types[i])
         num_atoms = len(trj[logic])
 
-        f = open('inc.parameters', 'w')
-        f.write('C parameters\n')
-        f.write('        parameter (num_atoms=%d)\n' %num_atoms)
-        f.write('        parameter (n=%d)\n' %n)
-        f.write('        parameter (L=%f)\n' %L)
+        f = open('inc.params', 'w')
+        f.write('%f %f %f\n' % (Lx, Ly, Lz))
+        f.write('%d' %n)
         f.close()
 
         for ind, fname in enumerate(self.fnames):
@@ -1986,7 +1826,7 @@ class Dumpobj():
             trj = trj[np.argsort(trj[:,0])]
             trj = trj[logic]
 
-            f = open('dump_temp', 'w')
+            f = open('input.xyz', 'w')
             f.write('ITEM: TIMESTEP\n')
             f.write('0\n')
             f.write('ITEM: NUMBER OF ATOMS\n')
@@ -2000,9 +1840,10 @@ class Dumpobj():
                 f.write('%d\t%d\t%d\t%s\t%s\t%s\n' %(line[0], line[1], line[2], line[3], line[4], line[5]))
             f.close()
             
-            subprocess.Popen('mpif90 sf_mpi.f', shell=True).wait()
+            if not os.path.exists('sf.out'):
+                subprocess.Popen('mpic++ sf.cpp -o sf.out', shell=True).wait()
             time.sleep(2)
-            subprocess.Popen('mpirun -np 32 ./a.out', shell=True).wait()
+            subprocess.Popen('mpirun -np 32 ./sf.out', shell=True).wait()
             os.rename('sq.txt', 'sq_{}.txt'.format(fname.split('.')[-1]))
 
 def group2blob(binary_2D):
@@ -2052,3 +1893,14 @@ def floodfill_pbc(binary_2D, x, y, blob, repeat=4):
             floodfill_pbc(array, x, y-1, blob)
         if y < repeat*len(array[x%len(array)])-1:
             floodfill_pbc(array, x, y+1, blob)
+
+def view_xy(binary_3D):
+    array = binary_3D
+
+    'sum up over thickness'
+    topview = np.sum(binary_3D, axis=2)
+
+    'averagve over thickness'
+    #topview = np.average(binary_3D, axis=2)
+
+    return topview
